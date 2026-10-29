@@ -48,13 +48,16 @@ Signer 至少需要：
   "policy_version": "sa-policy-v1",
   "allow_legacy_token_grant": false,
   "eaa_keys": {"eaa-2026-01": "REPLACE_BASE64URL_ED25519_PUBLIC_KEY"},
-  "kms_endpoint": "https://kms.example",
+  "kms_provider": "infisical",
+  "kms_endpoint": "https://infisical.example",
+  "kms_auth_token_file": "secrets/infisical-kms-token",
   "revocation_endpoint": "https://authority.example/v1/grants/status",
   "ledger_state_file": "state/signer-ledger.json",
   "key_generations": [{
     "generation": "generation-1",
     "key_id": "jwt-2026-01",
-    "key_ref": "kms/sa/jwt-2026-01",
+    "key_ref": "REPLACE_INFISICAL_KMS_KEY_UUID",
+    "public_key": "REPLACE_BASE64_DER_PUBLIC_KEY",
     "algorithm": "RS256",
     "state": "Active"
   }],
@@ -62,7 +65,13 @@ Signer 至少需要：
 }
 ```
 
-正常 signer 必须配置 `kms_endpoint`。`--allow-local-key-provider` 和 `local_key_files` 仅用于开发测试，会让 signer 进程接触可导出的私钥，不能用于生产。
+正常 signer 必须配置 `kms_endpoint`。将 `kms_provider` 设为 `infisical` 即可使用 Infisical 原生 KMS API；省略该字段或设为 `http` 时继续使用通用的受限 HTTP adapter。Infisical provider 还需要 signer 本地的 `kms_auth_token_file` bearer token 文件；该文件不能放进 Kubernetes 控制面对象，也不能提交到仓库。每个 `key_ref` 必须填写 Infisical KMS key UUID，`key_id` 仍然是 issuance/JWT 对外发布的逻辑标识。
+
+Signer 使用的 Infisical key 必须处于 enabled 状态、用途为 `sign-verify` 且不可导出。Adapter 在本地组装 JWT header 和 payload，只把 JWS signing input 交给 Infisical，并使用 Infisical public key 本地验证返回的签名。CA 和 etcd X.509 signer 也使用同一边界：本地构造 leaf/intermediate chain，只把 intermediate certificate signature 交给 Infisical。
+
+如果 signer token 只使用 `Cryptographic Operator` 权限，每个 generation 都必须在 `public_key` 中配置 Infisical `public-key` endpoint 返回的公钥材料（base64 DER 或 PEM）。这样运行时只调用签名 API，adapter 不会执行 key management read。Project Admin 只用于测试阶段的 key 生命周期和初始化配置。
+
+`--allow-local-key-provider` 和 `local_key_files` 仅用于开发测试，会让 signer 进程接触可导出的私钥，不能用于生产。
 
 Node-agent 至少需要 authority/signer endpoint、worker identity、identity key，以及按 `namespace/name` 配置的 binding。当前命令使用静态 `bindings` 只用于 bootstrap/test；生产 agent 必须替换为基于 attestation 的 resolver，并提供不可变的 ServiceAccount UID、Pod UID、audience、issuer 和 generation。
 

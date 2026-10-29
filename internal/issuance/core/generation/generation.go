@@ -30,6 +30,7 @@ type Metadata struct {
 	KeyID      string `json:"key_id"`
 	Algorithm  string `json:"algorithm"`
 	KeyRef     string `json:"key_ref,omitempty"`
+	PublicKey  string `json:"public_key,omitempty"`
 	State      State  `json:"state"`
 }
 

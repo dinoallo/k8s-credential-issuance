@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/dinoallo/k8s-credential-issuance/internal/issuance/core/generation"
 	"github.com/dinoallo/k8s-credential-issuance/internal/issuance/core/identity"
 	"github.com/dinoallo/k8s-credential-issuance/internal/issuance/core/kms"
+	infisicalapi "github.com/dinoallo/k8s-credential-issuance/internal/issuance/core/kms/infisical"
 	"github.com/dinoallo/k8s-credential-issuance/internal/issuance/core/ledger"
 	"github.com/dinoallo/k8s-credential-issuance/internal/issuance/core/pipeline"
 	"github.com/dinoallo/k8s-credential-issuance/internal/issuance/core/transport"
@@ -31,6 +33,8 @@ type configFile struct {
 	PolicyVersion         string                `json:"policy_version"`
 	EAAKeys               map[string]string     `json:"eaa_keys"`
 	KMSEndpoint           string                `json:"kms_endpoint,omitempty"`
+	KMSProvider           string                `json:"kms_provider,omitempty"`
+	KMSAuthTokenFile      string                `json:"kms_auth_token_file,omitempty"`
 	RevocationEndpoint    string                `json:"revocation_endpoint,omitempty"`
 	AllowLegacyTokenGrant bool                  `json:"allow_legacy_token_grant,omitempty"`
 	ReplayStateFile       string                `json:"replay_state_file"`
@@ -70,14 +74,39 @@ func run(configPath, listenAddress, tlsCertFile, tlsKeyFile string, allowLocal b
 	}
 	policies := make([]kms.Policy, 0, len(config.KeyGenerations))
 	for _, metadata := range config.KeyGenerations {
-		policies = append(policies, kms.Policy{Domain: "sa", Purpose: kms.PurposeServiceAccountJWT, Generation: metadata.Generation, KeyID: metadata.KeyID, KeyRef: metadata.KeyRef, Algorithm: metadata.Algorithm})
+		policies = append(policies, kms.Policy{Domain: "sa", Purpose: kms.PurposeServiceAccountJWT, Generation: metadata.Generation, KeyID: metadata.KeyID, KeyRef: metadata.KeyRef, PublicKey: metadata.PublicKey, Algorithm: metadata.Algorithm})
 	}
 	var backend kms.Backend
 	if config.KMSEndpoint != "" {
 		if allowLocal {
 			return fmt.Errorf("--allow-local-key-provider cannot be combined with kms_endpoint")
 		}
-		backend = &kms.HTTPBackend{Endpoint: config.KMSEndpoint, HTTPClient: &http.Client{Timeout: 15 * time.Second}}
+		switch strings.ToLower(config.KMSProvider) {
+		case "", "http":
+			backend = &kms.HTTPBackend{Endpoint: config.KMSEndpoint, HTTPClient: &http.Client{Timeout: 15 * time.Second}}
+		case "infisical":
+			if config.KMSAuthTokenFile == "" {
+				return fmt.Errorf("kms_auth_token_file is required for the Infisical KMS provider")
+			}
+			tokenData, err := os.ReadFile(resolvePath(baseDir, config.KMSAuthTokenFile))
+			if err != nil {
+				return fmt.Errorf("read Infisical KMS token: %w", err)
+			}
+			token := strings.TrimSpace(string(tokenData))
+			if token == "" {
+				return fmt.Errorf("Infisical KMS token file is empty")
+			}
+			client, err := infisicalapi.NewClient(config.KMSEndpoint, token, &http.Client{Timeout: 15 * time.Second})
+			if err != nil {
+				return err
+			}
+			backend, err = kms.NewInfisicalBackend(client)
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported kms_provider %q", config.KMSProvider)
+		}
 	} else {
 		if !allowLocal {
 			return fmt.Errorf("kms_endpoint is required; use --allow-local-key-provider only for isolated development")

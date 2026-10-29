@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -58,11 +59,15 @@ type Artifact struct {
 }
 
 type Policy struct {
-	Domain                    v1.Domain
-	Purpose                   string
-	Generation                string
-	KeyID                     string
-	KeyRef                    string
+	Domain     v1.Domain
+	Purpose    string
+	Generation string
+	KeyID      string
+	KeyRef     string
+	// PublicKey is optional public-key material for runtime tokens that are
+	// limited to Infisical's Cryptographic Operator role. When present, the
+	// backend does not need key-metadata/public-key management reads.
+	PublicKey                 string
 	Algorithm                 string
 	Profile                   string
 	SignerName                string
@@ -315,6 +320,10 @@ func validateSigner(algorithm string, key crypto.PrivateKey) (crypto.Signer, err
 		if key, ok := key.(*ecdsa.PrivateKey); !ok || key.Curve != elliptic.P521() {
 			return nil, fmt.Errorf("ES512 requires P-521")
 		}
+	case "EdDSA", "Ed25519":
+		if key, ok := key.(ed25519.PrivateKey); !ok || len(key) != ed25519.PrivateKeySize {
+			return nil, fmt.Errorf("%s requires an Ed25519 key", algorithm)
+		}
 	default:
 		return nil, fmt.Errorf("unsupported JWT algorithm %q", algorithm)
 	}
@@ -322,13 +331,17 @@ func validateSigner(algorithm string, key crypto.PrivateKey) (crypto.Signer, err
 }
 
 func signJWT(signer crypto.Signer, algorithm, keyID string, payload []byte) (string, error) {
-	header, err := canonical.Marshal(map[string]any{"alg": algorithm, "kid": keyID, "typ": "JWT"})
+	input, err := jwtSigningInput(algorithm, keyID, payload)
 	if err != nil {
 		return "", err
 	}
-	protected := base64.RawURLEncoding.EncodeToString(header)
-	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
-	input := protected + "." + encodedPayload
+	if algorithm == "EdDSA" || algorithm == "Ed25519" {
+		signature, err := signer.Sign(rand.Reader, []byte(input), crypto.Hash(0))
+		if err != nil {
+			return "", err
+		}
+		return input + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	}
 	digest, hash, err := signingDigest(algorithm, []byte(input))
 	if err != nil {
 		return "", err
@@ -352,6 +365,16 @@ func signJWT(signer crypto.Signer, algorithm, keyID string, payload []byte) (str
 	return input + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
+func jwtSigningInput(algorithm, keyID string, payload []byte) (string, error) {
+	header, err := canonical.Marshal(map[string]any{"alg": algorithm, "kid": keyID, "typ": "JWT"})
+	if err != nil {
+		return "", err
+	}
+	protected := base64.RawURLEncoding.EncodeToString(header)
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	return protected + "." + encodedPayload, nil
+}
+
 func signingDigest(algorithm string, input []byte) ([]byte, crypto.Hash, error) {
 	switch algorithm {
 	case "RS256", "ES256":
@@ -363,6 +386,8 @@ func signingDigest(algorithm string, input []byte) ([]byte, crypto.Hash, error) 
 	case "ES512":
 		digest := sha512.Sum512(input)
 		return digest[:], crypto.SHA512, nil
+	case "EdDSA", "Ed25519":
+		return append([]byte(nil), input...), crypto.Hash(0), nil
 	default:
 		return nil, 0, fmt.Errorf("unsupported JWT algorithm %q", algorithm)
 	}
@@ -391,6 +416,10 @@ func publicJWK(public crypto.PublicKey, policy Policy) map[string]any {
 		jwk["crv"] = curve
 		jwk["x"] = base64.RawURLEncoding.EncodeToString(key.X.FillBytes(make([]byte, width)))
 		jwk["y"] = base64.RawURLEncoding.EncodeToString(key.Y.FillBytes(make([]byte, width)))
+	case ed25519.PublicKey:
+		jwk["kty"] = "OKP"
+		jwk["crv"] = "Ed25519"
+		jwk["x"] = base64.RawURLEncoding.EncodeToString(key)
 	}
 	return jwk
 }

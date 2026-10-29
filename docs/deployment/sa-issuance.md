@@ -76,14 +76,17 @@ Signer (`sa-signer`):
   "eaa_keys": {
     "eaa-2026-01": "REPLACE_BASE64URL_ED25519_PUBLIC_KEY"
   },
-  "kms_endpoint": "https://kms.example",
+  "kms_provider": "infisical",
+  "kms_endpoint": "https://infisical.example",
+  "kms_auth_token_file": "secrets/infisical-kms-token",
   "revocation_endpoint": "https://authority.example/v1/grants/status",
   "ledger_state_file": "state/signer-ledger.json",
   "key_generations": [
     {
       "generation": "generation-1",
       "key_id": "jwt-2026-01",
-      "key_ref": "kms/sa/jwt-2026-01",
+      "key_ref": "REPLACE_INFISICAL_KMS_KEY_UUID",
+      "public_key": "REPLACE_BASE64_DER_PUBLIC_KEY",
       "algorithm": "RS256",
       "state": "Active"
     }
@@ -92,8 +95,30 @@ Signer (`sa-signer`):
 }
 ```
 
-`kms_endpoint` is required for the normal signer process. The
-`--allow-local-key-provider` flag and `local_key_files` are development-only
+`kms_endpoint` is required for the normal signer process. Set
+`kms_provider` to `infisical` to use the native Infisical KMS API; the
+default/`http` value retains the generic constrained HTTP adapter. For the
+Infisical provider, `kms_auth_token_file` is a signer-local bearer-token file
+and must not be stored in Kubernetes control-plane objects or committed to
+the repository. Each `key_ref` must be the Infisical KMS key UUID, while
+`key_id` remains the issuance/JWT public identifier.
+
+Infisical keys used by the signer must be enabled, `sign-verify`, and
+non-exportable. The adapter assembles the JWT header and payload locally,
+submits only the JWS signing input to Infisical, and verifies the returned
+signature against Infisical's public key. The same adapter boundary can be
+used by the CA and etcd X.509 signers: those signers build the leaf and
+intermediate chain locally and delegate only the intermediate certificate
+signature.
+
+When the signer token is limited to the `Cryptographic Operator` role, each
+generation must include the public key material returned by Infisical's
+`public-key` endpoint in `public_key` (base64 DER or PEM). This keeps runtime
+operation to the signing API; the adapter will not perform management reads.
+The Project Admin role is appropriate only for test key lifecycle and
+provisioning.
+
+The `--allow-local-key-provider` flag and `local_key_files` are development-only
 and intentionally keep an exportable private key in the signer process. They
 must not be used for a production deployment.
 

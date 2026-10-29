@@ -33,7 +33,11 @@ const (
 	PurposeEtcdPeerCertificate   = "etcd-peer-certificate"
 	PurposeEtcdClientCertificate = "etcd-client-certificate"
 	AlgorithmRSASHA256           = "RSA-SHA256"
+	AlgorithmRSASHA384           = "RSA-SHA384"
+	AlgorithmRSASHA512           = "RSA-SHA512"
 	AlgorithmECDSASHA256         = "ECDSA-SHA256"
+	AlgorithmECDSASHA384         = "ECDSA-SHA384"
+	AlgorithmECDSASHA512         = "ECDSA-SHA512"
 	AlgorithmEd25519             = "Ed25519"
 )
 
@@ -365,8 +369,13 @@ func certificateAlgorithm(key crypto.PrivateKey) string {
 			return AlgorithmRSASHA256
 		}
 	case *ecdsa.PrivateKey:
-		if value.Curve == elliptic.P256() {
+		switch value.Curve {
+		case elliptic.P256():
 			return AlgorithmECDSASHA256
+		case elliptic.P384():
+			return AlgorithmECDSASHA384
+		case elliptic.P521():
+			return AlgorithmECDSASHA512
 		}
 	case ed25519.PrivateKey:
 		return AlgorithmEd25519
