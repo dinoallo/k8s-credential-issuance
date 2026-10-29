@@ -197,3 +197,7 @@ test environments may not allow opening a TCP listener. It still exercises the
 authority, signer, both Grant response shapes, legacy conversion, Grant
 verification, KMS boundary, ledger recovery, Kubernetes TokenRequest envelope,
 and node-agent request flow.
+
+## Related documents
+
+- [ServiceAccount `sa.key` migration plan](../migration/sa-key-migration.md)

@@ -94,3 +94,7 @@ GOCACHE=/tmp/k8s-credential-issuance-buildcache go build -buildvcs=false ./cmd/s
 ```
 
 受限测试环境可能不允许监听 TCP，因此仓库内 HTTP E2E 使用 handler transport；它仍覆盖 authority、signer、两种 Grant response shape、legacy 转换、Grant 校验、KMS 边界、ledger 恢复、Kubernetes TokenRequest envelope 和 node-agent 请求链路。
+
+## 相关文档
+
+- [ServiceAccount `sa.key` 迁移方案](../migration/sa-key-migration.zh-CN.md)
