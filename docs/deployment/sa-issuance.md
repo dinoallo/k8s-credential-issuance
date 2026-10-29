@@ -1,0 +1,174 @@
+# ServiceAccount issuance reference deployment
+
+This repository contains a reference SA path for the frozen `issuance/v1`
+contract. It is suitable for local integration and security-contract tests;
+the file-backed stores and static node-agent resolver are not an HA production
+deployment.
+
+## Processes and trust boundaries
+
+```text
+sa-node-agent --(worker proof)--> sa-authority --(Grant adapter)--> sa-signer
+       |                                                               |
+       +-- local Unix socket / TokenProvider API                         +-- constrained KMS
+```
+
+Build the three independently deployed processes with:
+
+```bash
+go build ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent
+```
+
+The authority owns the EAA private key and the registration/Grant ledger. The
+signer receives only configured EAA public keys and a KMS adapter. The
+node-agent owns the worker identity key and must not receive a Kubernetes
+administrator credential.
+
+## Configuration
+
+All paths are resolved relative to the configuration file. The following
+fields are the minimum shape; values shown as `REPLACE_*` are not usable
+secrets.
+
+Authority (`sa-authority`):
+
+```json
+{
+  "cluster_id": "cluster-1",
+  "issuer": "https://issuer.example",
+  "policy_version": "sa-policy-v1",
+  "grant_format": "compact-jws",
+  "signing_key_id": "eaa-2026-01",
+  "signing_key_file": "secrets/eaa-private-key.pem",
+  "proof_replay_state_file": "state/proof-replay.json",
+  "grant_ledger_file": "state/grants.json",
+  "max_token_lifetime_seconds": 3600,
+  "registrations": [
+    {
+      "registration_id": "registration-1",
+      "identity": "worker-1",
+      "identity_public_key": "REPLACE_BASE64URL_ED25519_PUBLIC_KEY",
+      "cluster_id": "cluster-1",
+      "service_account_namespace": "default",
+      "service_account_name": "reader",
+      "service_account_uid": "sa-uid-1",
+      "pod_uid": "pod-uid-1",
+      "issuer": "https://issuer.example",
+      "allowed_audiences": ["api"],
+      "max_token_lifetime_seconds": 3600,
+      "token_generation": "generation-1",
+      "key_id": "jwt-2026-01",
+      "policy_version": "sa-policy-v1",
+      "active": true
+    }
+  ]
+}
+```
+
+Signer (`sa-signer`):
+
+```json
+{
+  "cluster_id": "cluster-1",
+  "issuer": "https://issuer.example",
+  "policy_version": "sa-policy-v1",
+  "allow_legacy_token_grant": false,
+  "eaa_keys": {
+    "eaa-2026-01": "REPLACE_BASE64URL_ED25519_PUBLIC_KEY"
+  },
+  "kms_endpoint": "https://kms.example",
+  "revocation_endpoint": "https://authority.example/v1/grants/status",
+  "ledger_state_file": "state/signer-ledger.json",
+  "key_generations": [
+    {
+      "generation": "generation-1",
+      "key_id": "jwt-2026-01",
+      "key_ref": "kms/sa/jwt-2026-01",
+      "algorithm": "RS256",
+      "state": "Active"
+    }
+  ],
+  "max_token_lifetime_seconds": 3600
+}
+```
+
+`kms_endpoint` is required for the normal signer process. The
+`--allow-local-key-provider` flag and `local_key_files` are development-only
+and intentionally keep an exportable private key in the signer process. They
+must not be used for a production deployment.
+
+Node-agent (`sa-node-agent`):
+
+```json
+{
+  "authority_endpoint": "https://authority.example/v1/grants",
+  "signer_endpoint": "https://signer.example/v1/sign",
+  "identity": "worker-1",
+  "identity_key_file": "secrets/worker-1.pem",
+  "bindings": {
+    "default/reader": {
+      "cluster_id": "cluster-1",
+      "service_account_namespace": "default",
+      "service_account_name": "reader",
+      "service_account_uid": "sa-uid-1",
+      "pod_uid": "pod-uid-1",
+      "subject": "system:serviceaccount:default:reader",
+      "audience": ["api"],
+      "issuer": "https://issuer.example",
+      "not_before": 1760000000,
+      "not_after": 1760003600,
+      "token_generation": "generation-1"
+    }
+  }
+}
+```
+
+The static `bindings` map is only a bootstrap/test resolver. A production
+agent must replace it with an attestation-backed resolver that supplies the
+immutable ServiceAccount UID, Pod UID, audience, issuer, and generation.
+
+Default listeners are loopback for the authority and signer and
+`unix:///var/run/sa-node-agent.sock` for the node-agent. A non-loopback TCP
+listener requires `--tls-cert-file` and `--tls-key-file`; the Unix socket is
+created with mode `0600`. These flags establish server-side TLS. Mutual TLS,
+service-identity provisioning, HA ledgers, durable audit storage, and KMS
+recovery are additional deployment controls and are not supplied by the
+file-backed reference configuration.
+
+## Protocol boundary
+
+The endpoint and JSON field shapes remain recognizable to the existing SA
+direct path. `issuance/v1` Compact JWS is the default: the authority uses
+`grant_format=compact-jws` (or omits the field), and the signer keeps
+`allow_legacy_token_grant=false`. In this mode the common core verifies only
+the typed Compact JWS contract.
+
+For a migration with the old API-server carrier, set the authority's
+`grant_format` to `legacy-token-grant` and the signer's
+`allow_legacy_token_grant` to `true`. The authority then returns the old
+canonical JSON `TokenGrant` object, and the signer accepts it without requiring
+the new `X-Issuance-Identity` header. The SA adapter verifies the old
+`ed25519-v1:<key-id>:<signature>` envelope, preserves its binding digest
+semantics, and converts it to a typed Grant before entering the common core
+pipeline. The node-agent `/v1/token` compatibility envelope returns the
+Kubernetes-shaped `status.token` and `status.expirationTimestamp` fields.
+
+The legacy mode is explicit and must not be enabled accidentally: it exists to
+complete migration of the old carrier, while new deployments should use JWS.
+HA ledgers, complete mTLS identity provisioning, attestation-backed workload
+resolution, and production KMS/audit deployment remain separate production
+gates.
+
+## Verification
+
+```bash
+GOCACHE=/tmp/k8s-credential-issuance-gocache go test ./...
+GOCACHE=/tmp/k8s-credential-issuance-vetcache go vet -buildvcs=false ./...
+GOCACHE=/tmp/k8s-credential-issuance-buildcache go build -buildvcs=false ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent
+```
+
+The in-tree HTTP end-to-end test uses a handler transport because restricted
+test environments may not allow opening a TCP listener. It still exercises the
+authority, signer, both Grant response shapes, legacy conversion, Grant
+verification, KMS boundary, ledger recovery, Kubernetes TokenRequest envelope,
+and node-agent request flow.
