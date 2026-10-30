@@ -1,25 +1,27 @@
 # k8s-credential-issuance Helm chart
 
-This chart deploys the three runnable components currently present in this
+This chart deploys the runnable components currently present in this
 repository:
 
 | Component | Kubernetes workload | Default endpoint |
 | --- | --- | --- |
 | `sa-authority` | single-replica Deployment and ClusterIP Service | `http://<release>-k8s-credential-issuance-authority:9441` |
 | `sa-signer` | single-replica Deployment and ClusterIP Service | `http://<release>-k8s-credential-issuance-signer:9444` |
+| `sa-attestor` | opt-in Deployment, read-only Kubernetes API access, and ClusterIP Service | `https://<release>-k8s-credential-issuance-attestor:9445` |
 | `sa-node-agent` | DaemonSet with a node-local Unix socket | `/var/run/k8s-credential-issuance/sa-node-agent.sock` |
 
 The chart is a deployment wrapper around the reference implementation. It
-does not turn the file-backed ledgers into an HA store and does not provision
-an attestation service, KMS, mTLS identities, or Kubernetes TokenProvider
-integration automatically.
+does not turn the file-backed ledgers into an HA store or provision external
+certificate/key rotation and Kubernetes TokenProvider integration
+automatically. The attestor is opt-in and requires explicit key, mTLS, and
+RBAC values.
 
 ## Prerequisites
 
 - Helm 3.12 or newer.
 - A Kubernetes cluster supported by the chart's `kubeVersion` constraint.
 - Container images published by the repository workflow, or overrides for the
-  three image repositories.
+  component image repositories.
 - An Ed25519 authority signing key, a node-agent identity key for every node
   identity, and an Infisical KMS token for the normal signer path.
 
@@ -98,6 +100,16 @@ deliberately not placed in the default `values.yaml` or generated ConfigMaps:
 ```bash
 kubectl -n issuance create secret generic kci-node-identity \
   --from-file=worker-1.pem=./worker-1.pem
+kubectl -n issuance create secret generic kci-attestor-key \
+  --from-file=attestor-key.pem=./attestor-key.pem
+kubectl -n issuance create secret generic kci-attestor-tls \
+  --from-file=tls.crt=./attestor.crt \
+  --from-file=tls.key=./attestor.key \
+  --from-file=client-ca.crt=./node-agent-client-ca.crt
+kubectl -n issuance create secret generic kci-node-attestor-tls \
+  --from-file=ca.crt=./attestor-ca.crt \
+  --from-file=tls.crt=./node-1-attestor.crt \
+  --from-file=tls.key=./node-1-attestor.key
 ```
 
 Set the secret names and the real policy, registration, generation, KMS, and
@@ -133,11 +145,31 @@ signer:
 nodeAgent:
   identityKey:
     secretName: kci-node-identity
+  attestationTLS:
+    enabled: true
+    secretName: kci-node-attestor-tls
   config:
     identity: worker-1
-    attestation_endpoint: https://attestor.example/v1/attest
+    attestation_endpoint: https://kci-k8s-credential-issuance-attestor:9445/v1/attest
     attestation_identity: node-attestor-1
     attestation_public_key: REPLACE_BASE64URL_ED25519_PUBLIC_KEY
+
+attestor:
+  enabled: true
+  attestorKey:
+    secretName: kci-attestor-key
+  tls:
+    enabled: true
+    secretName: kci-attestor-tls
+  config:
+    attestor_identity: node-attestor-1
+    cluster_id: cluster-1
+    issuer: https://issuer.example
+    token_generation: generation-1
+    token_key_id: jwt-2026-01
+    default_audience: https://kubernetes.default.svc
+  serviceAccount:
+    name: kci-attestor
 ```
 
 Install or upgrade the release:
@@ -165,6 +197,13 @@ Chart-managed key creation is intended for controlled tests. In production,
 create the authority Secret outside Helm so the private key is not stored in
 Helm release values or metadata.
 
+For a chart-managed attestor test deployment, also set
+`attestor.enabled=true`, `attestor.attestorKey.create=true` and the three
+`--set-file` values under `attestor.tls` and
+`nodeAgent.attestationTLS`. Do not use chart-managed private keys for a
+production rollout unless the surrounding secret-management policy permits
+it.
+
 For production, enable TLS on the authority and signer, reference pre-created
 `kubernetes.io/tls` Secrets, and ensure their certificates contain the
 corresponding Service DNS names. The default HTTP listener is intended for
@@ -175,12 +214,14 @@ that path with the local Kubernetes component that consumes the socket.
 ## Split-cluster production deployment
 
 The recommended production topology is to keep the issuance services in an
-issuance cluster and run the node-agent DaemonSet in each workload cluster:
+issuance cluster and run the node-agent DaemonSet plus the Kubernetes attestor
+in each workload cluster:
 
 ```text
 workload cluster                         issuance cluster
 sa-node-agent DaemonSet -- HTTPS -->     sa-authority Service
-                                      \-> sa-signer Service
+       |                              \-> sa-signer Service
+       \-> sa-attestor -- Kubernetes API (read-only)
 ```
 
 Use two Helm releases. The issuance-cluster values disable the DaemonSet:
@@ -228,6 +269,9 @@ ingress:
 
 nodeAgent:
   enabled: false
+
+attestor:
+  enabled: false
 ```
 
 Install it in the issuance cluster after creating the authority signing-key,
@@ -260,6 +304,9 @@ signer:
 
 nodeAgent:
   enabled: true
+  attestationTLS:
+    enabled: true
+    secretName: sa-node-attestor-tls
   config:
     authority_endpoint: https://sa-authority.issuance.example/v1/grants
     signer_endpoint: https://sa-signer.issuance.example/v1/sign
@@ -269,6 +316,21 @@ nodeAgent:
     attestation_public_key: REPLACE_BASE64URL_ED25519_PUBLIC_KEY
   identityKey:
     secretName: sa-node-identity
+
+attestor:
+  enabled: true
+  attestorKey:
+    secretName: sa-attestor-key
+  tls:
+    enabled: true
+    secretName: sa-attestor-tls
+  config:
+    attestor_identity: node-attestor-1
+    cluster_id: cluster-1
+    issuer: https://issuer.example
+    token_generation: generation-1
+    token_key_id: jwt-2026-01
+    default_audience: https://kubernetes.default.svc
 ```
 
 Install it in the workload cluster after creating the node identity Secret:
@@ -287,10 +349,16 @@ not routable; publish stable private DNS names through an internal
 LoadBalancer, Gateway, or equivalent network path and use those names in the
 node-agent values. The chart does not create that cross-cluster network path.
 
-The current binary and chart provide server-side TLS only. Client
-certificates, custom CA bundles, and complete mTLS identity provisioning must
-be supplied by the surrounding platform. Also note that one node-agent
-DaemonSet currently mounts one configured `identity` and identity-key Secret
+The authority, signer, and node-agent server endpoints provide server-side
+TLS. Client certificates, custom CA bundles, and complete mTLS identity
+provisioning must be supplied by the surrounding platform. When
+`attestor.enabled` is true,
+the chart creates a dedicated ServiceAccount, ClusterRole, and
+ClusterRoleBinding with only `get` access to Pods and ServiceAccounts. The
+attestor TCP endpoint requires its serving certificate, client CA, and the
+node-agent client certificate bundle; `/healthz` and `/readyz` remain probeable
+without a client certificate. Also note that one node-agent DaemonSet
+currently mounts one configured `identity` and identity-key Secret
 on every node; per-node identities require separate node pools/releases or an
 additional node-local provisioning mechanism.
 
@@ -299,9 +367,10 @@ additional node-local provisioning mechanism.
 - Authority and signer state are stored in separate PVCs by default. Keep
   both workloads at one replica while using the in-tree file stores; scaling
   them requires replacing those stores with transactional shared backends.
-- `authority.config.registrations`, `signer.config.key_generations`, and
-  `nodeAgent.config` map directly to the JSON configuration consumed by the
-  binaries. The chart fills in mounted file paths and in-cluster service URLs.
+- `authority.config.registrations`, `signer.config.key_generations`,
+  `attestor.config`, and `nodeAgent.config` map to the configuration consumed
+  by the binaries. The chart fills in mounted file paths and in-cluster
+  service URLs.
 - `signer.allowLocalKeyProvider` and `nodeAgent.allowStaticBindings` are
   development-only escape hatches and should remain disabled in production.
 - The current source tree has no `ca-*` or `etcd-*` command binaries, so this

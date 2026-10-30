@@ -136,6 +136,11 @@ spec:
             - name: identity-key
               mountPath: {{ .Values.nodeAgent.identityKey.mountPath }}
               readOnly: true
+            {{- if .Values.nodeAgent.attestationTLS.enabled }}
+            - name: attestation-tls
+              mountPath: {{ .Values.nodeAgent.attestationTLS.mountPath }}
+              readOnly: true
+            {{- end }}
             - name: socket
               mountPath: {{ .Values.nodeAgent.socket.mountPath }}
             {{- if .Values.nodeAgent.tls.enabled }}
@@ -158,6 +163,19 @@ spec:
             items:
               - key: {{ .Values.nodeAgent.identityKey.key | quote }}
                 path: {{ .Values.nodeAgent.identityKey.key | quote }}
+        {{- if .Values.nodeAgent.attestationTLS.enabled }}
+        - name: attestation-tls
+          secret:
+            secretName: {{ include "kci.nodeAttestationTLSSecretName" . }}
+            defaultMode: 288
+            items:
+              - key: {{ .Values.nodeAgent.attestationTLS.caKey | quote }}
+                path: {{ .Values.nodeAgent.attestationTLS.caKey | quote }}
+              - key: {{ .Values.nodeAgent.attestationTLS.certKey | quote }}
+                path: {{ .Values.nodeAgent.attestationTLS.certKey | quote }}
+              - key: {{ .Values.nodeAgent.attestationTLS.keyKey | quote }}
+                path: {{ .Values.nodeAgent.attestationTLS.keyKey | quote }}
+        {{- end }}
         - name: socket
           {{- if .Values.nodeAgent.socket.hostPath }}
           hostPath:

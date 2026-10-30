@@ -26,6 +26,9 @@ type configFile struct {
 	AttestationEndpoint  string                          `json:"attestation_endpoint,omitempty"`
 	AttestationIdentity  string                          `json:"attestation_identity,omitempty"`
 	AttestationPublicKey string                          `json:"attestation_public_key,omitempty"`
+	AttestationCAFile    string                          `json:"attestation_ca_file,omitempty"`
+	AttestationCertFile  string                          `json:"attestation_client_cert_file,omitempty"`
+	AttestationKeyFile   string                          `json:"attestation_client_key_file,omitempty"`
 }
 
 func main() {
@@ -74,6 +77,9 @@ func run(configPath, listenAddress, tlsCertFile, tlsKeyFile string, allowStaticB
 			Identity:          config.Identity,
 			AttestorIdentity:  config.AttestationIdentity,
 			AttestorPublicKey: attestorKey,
+			TLSCAFile:         resolveOptionalPath(baseDir, config.AttestationCAFile),
+			TLSCertFile:       resolveOptionalPath(baseDir, config.AttestationCertFile),
+			TLSKeyFile:        resolveOptionalPath(baseDir, config.AttestationKeyFile),
 		})
 		if err != nil {
 			return err
@@ -126,6 +132,13 @@ func resolvePath(baseDir, path string) string {
 		return path
 	}
 	return filepath.Join(baseDir, path)
+}
+
+func resolveOptionalPath(baseDir, path string) string {
+	if path == "" {
+		return ""
+	}
+	return resolvePath(baseDir, path)
 }
 
 func fatal(err error) {

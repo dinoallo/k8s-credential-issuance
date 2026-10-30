@@ -43,6 +43,30 @@ spec:
   selector:
     {{- include "kci.selectorLabels" (dict "root" . "component" "signer") | nindent 4 }}
 {{- end }}
+{{- if or (and .Values.signer.enabled .Values.signer.service.enabled) (and .Values.attestor.enabled .Values.attestor.service.enabled) }}
+---
+{{- end }}
+{{- if and .Values.attestor.enabled .Values.attestor.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "attestor") }}
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "attestor") | nindent 4 }}
+  {{- with .Values.attestor.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.attestor.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.attestor.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "kci.selectorLabels" (dict "root" . "component" "attestor") | nindent 4 }}
+{{- end }}
 {{- if and .Values.nodeAgent.enabled .Values.nodeAgent.service.enabled }}
 ---
 {{- end }}

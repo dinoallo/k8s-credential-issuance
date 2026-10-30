@@ -2,8 +2,8 @@
 
 The repository includes a reference Helm chart at
 [`charts/k8s-credential-issuance`](../../charts/k8s-credential-issuance/). It
-deploys the current `sa-authority`, `sa-signer`, and `sa-node-agent` command
-binaries as Kubernetes workloads.
+deploys the current `sa-authority`, `sa-signer`, `sa-attestor`, and
+`sa-node-agent` command binaries as Kubernetes workloads.
 
 The chart README contains the install example, values layout, Secret
 handling, TLS settings, node-agent socket integration, and the limitations of
@@ -13,9 +13,11 @@ the file-backed reference stores:
 - [ServiceAccount deployment reference](./sa-issuance.md)
 
 The chart intentionally does not claim HA or production readiness. Configure
-the external KMS, attestation service, mTLS identities, durable audit path,
-and transactional ledgers before using it beyond an isolated reference
-environment.
+the external KMS, mTLS identities, durable audit path, and transactional
+ledgers before using it beyond an isolated reference environment. When
+enabled, the attestor gets a dedicated ServiceAccount and only `get` access to
+Pods and ServiceAccounts; its proof key and mTLS materials must still be
+provisioned by the deployment platform.
 
 ## Authority signing-key Secret
 
@@ -105,6 +107,8 @@ releases:
        nginx.ingress.kubernetes.io/backend-protocol: HTTPS
    nodeAgent:
      enabled: false
+   attestor:
+     enabled: false
    ```
 
    ```bash
@@ -113,19 +117,30 @@ releases:
      --values ./values-issuance.yaml
    ```
 
-2. In each workload cluster, install only the node-agent and set explicit
-   HTTPS endpoints for the external services:
+2. In each workload cluster, install the node-agent and, if the attestor runs
+   there, enable it with its Kubernetes API RBAC and mTLS Secrets:
 
    ```yaml
    authority:
      enabled: false
    signer:
      enabled: false
+   attestor:
+     enabled: true
+     tls:
+       enabled: true
+       secretName: sa-attestor-tls
+     attestorKey:
+       secretName: sa-attestor-key
    nodeAgent:
      enabled: true
+     attestationTLS:
+       enabled: true
+       secretName: sa-node-attestor-tls
      config:
        authority_endpoint: https://sa-authority.issuance.example/v1/grants
        signer_endpoint: https://sa-signer.issuance.example/v1/sign
+       attestation_endpoint: https://kci-node-agent-k8s-credential-issuance-attestor:9445/v1/attest
    ```
 
    ```bash
@@ -139,8 +154,9 @@ namespace. They must be overridden for separate releases. For a separate
 cluster, expose the issuance services through an internal LoadBalancer,
 Gateway, or equivalent private network path; ClusterIP and
 `*.svc.cluster.local` addresses are not cross-cluster endpoints. Create the
-authority/signer Secrets in the issuance cluster and the node identity Secret
-in each workload cluster. The current chart also uses one configured
+authority/signer Secrets in the issuance cluster, attestor and node-agent
+attestation Secrets in each workload cluster, and the node identity Secret in
+each workload cluster. The current chart also uses one configured
 node-agent identity and key for the whole DaemonSet; per-node identities need
 additional provisioning or separate releases.
 

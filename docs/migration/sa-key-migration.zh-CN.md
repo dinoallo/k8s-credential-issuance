@@ -231,11 +231,16 @@ authority:
 
 仓库没有提供：
 
-- 将现有 `sa.key` 安全导入 Infisical 或其他 KMS 的功能；
+- 目标 KMS 的 exact-key import、不可导出和恢复流程；
+- 原有 public JWK、`kid` 和 algorithm 的一致性校验；
+- kube-apiserver/controller-manager 到新 token 路径的实际切流；
+- kubelet/node-agent 对现有 projected-token consumer 的 Grant transport；
 - 自动配置 kube-apiserver issuer、audience、trust bundle 或 signing key；
 - 生产级 kubelet TokenRequest provider 安装；
-- HA ledger、生产 attestor、完整 mTLS identity provisioning 或生产级 KMS recovery automation；
-- 让同一个 signer release 安全服务多个原生集群 key/issuer 对的能力。
+- 外部 mTLS identity provisioning、HA ledger、生产级 KMS recovery、master
+  私钥删除和审计工具；
+- 让同一个 signer release 安全服务多个原生集群 key/issuer 对的能力；
+- failure injection、token TTL 验证和 rollback rehearsal 工具。
 
 Chart 挂载 token Secret 和文件型 store 都是参考部署机制，不能单独满足生产级控制面密钥删除或 credential injection 策略。
 

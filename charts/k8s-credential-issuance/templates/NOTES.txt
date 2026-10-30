@@ -6,6 +6,10 @@ Check workload status:
 Authority and signer are available inside the namespace at:
   {{ include "kci.authorityEndpoint" . }}
   {{ include "kci.signerEndpoint" . }}
+{{- if .Values.attestor.enabled }}
+The attestor is available at:
+  {{ include "kci.attestorEndpoint" . }}
+{{- end }}
 
 The default values reference externally managed key Secrets and use HTTP for
 the in-cluster services. Review the chart README before using this release in

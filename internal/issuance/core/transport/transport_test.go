@@ -3,12 +3,21 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRequireTLSForUnixAndLoopbackListeners(t *testing.T) {
@@ -97,6 +106,88 @@ func TestListenUnixSocketSetsPrivateModeAndCleansUp(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("socket cleanup error = %v", err)
 	}
+}
+
+func TestRunWithTLSConfigServesTLS(t *testing.T) {
+	certificate := testServerCertificate(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWithTLSConfig(ctx, listener, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/healthz" {
+				http.NotFound(writer, request)
+				return
+			}
+			writer.WriteHeader(http.StatusOK)
+		}), &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}})
+	}()
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}}
+	endpoint := "https://" + listener.Addr().String() + "/healthz"
+	var response *http.Response
+	var requestErr error
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		response, requestErr = client.Get(endpoint)
+		if requestErr == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if requestErr != nil {
+		t.Fatal(requestErr)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("TLS server did not shut down")
+	}
+}
+
+func testServerCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := tls.X509KeyPair(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certificate
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

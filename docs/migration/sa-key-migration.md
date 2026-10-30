@@ -333,14 +333,18 @@ The repository provides:
 
 The repository does not provide:
 
-- secure import of an existing `sa.key` into Infisical or another KMS;
+- target-KMS exact-key import, non-exportability, and recovery procedures;
+- consistency checks for the existing public JWK, `kid`, and algorithm;
+- the kube-apiserver/controller-manager external TokenRequest cutover;
+- kubelet/node-agent Grant transport for existing projected-token consumers;
 - automatic kube-apiserver issuer, audience, trust-bundle, or signing-key
   configuration;
 - a production kubelet TokenRequest provider installation;
-- HA ledger, production attestor, complete mTLS identity provisioning, or
-  production-grade KMS recovery automation;
+- external mTLS identity provisioning, HA ledger, production-grade KMS recovery,
+  master-node private-key removal, and audit tooling;
 - a way for one signer release to safely serve multiple native-cluster key and
-  issuer pairs.
+  issuer pairs;
+- failure-injection, token-TTL, and rollback-rehearsal tooling.
 
 The chart's mounted token Secret and file-backed stores are reference
 deployment mechanisms. They do not by themselves satisfy a production

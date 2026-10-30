@@ -166,6 +166,13 @@ func IsKubernetesTokenRequest(request signapi.TokenRequest) bool {
 	return err == nil && hasRequest
 }
 
+// KubernetesTokenRequestDetails exposes the normalized Kubernetes TokenRequest
+// fields needed by trusted attestors. It accepts both the direct carrier
+// fields and the raw authentication.k8s.io/v1 TokenRequest envelope.
+func KubernetesTokenRequestDetails(request signapi.TokenRequest) (audiences []string, expirationSeconds *int64, ref *signapi.BoundObjectReference, hasKubernetesRequest bool, err error) {
+	return requestDetails(request)
+}
+
 func KubernetesTokenResponse(rawRequest []byte, token string, expiration int64) ([]byte, error) {
 	var object map[string]json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(rawRequest))
@@ -196,6 +203,13 @@ func requestDetails(request signapi.TokenRequest) (audiences []string, expiratio
 	}
 	decoder := json.NewDecoder(bytes.NewReader(request.Request))
 	if err := decoder.Decode(&envelope); err != nil {
+		return nil, nil, nil, false, fmt.Errorf("decode Kubernetes TokenRequest: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, nil, nil, false, fmt.Errorf("decode Kubernetes TokenRequest: trailing JSON value")
+		}
 		return nil, nil, nil, false, fmt.Errorf("decode Kubernetes TokenRequest: %w", err)
 	}
 	if envelope.Spec == nil {

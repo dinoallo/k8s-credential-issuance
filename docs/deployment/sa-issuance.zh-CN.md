@@ -1,6 +1,6 @@
 # ServiceAccount 签发参考部署
 
-本仓库实现的是冻结的 `issuance/v1` 契约下的 SA 参考路径，可用于本地集成和安全契约测试。文件存储和 attestor 服务不是 HA 生产部署；node-agent 的带签名远程 attestation resolver 已实现，但 attestor 及其部署控制仍由环境提供。
+本仓库实现的是冻结的 `issuance/v1` 契约下的 SA 参考路径，可用于本地集成和安全契约测试。文件存储不是 HA 生产部署；仓库现在包含带只读 Kubernetes API 访问和 mTLS TCP 边界的 `sa-attestor` 参考实现。HA 存储以及证书/密钥 provisioning 仍由部署平台负责。
 
 ## 进程与信任边界
 
@@ -8,12 +8,14 @@
 sa-node-agent --（worker proof）--> sa-authority --（Grant adapter）--> sa-signer
        |                                                               |
        +-- 本地 Unix socket / TokenProvider API                          +-- 受限 KMS
+        |
+        +-- mTLS attestation request --> sa-attestor --（只读）--> Kubernetes API
 ```
 
-构建三个独立部署的进程：
+构建这些独立部署的进程：
 
 ```bash
-go build ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent
+go build ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent ./cmd/sa-attestor
 ```
 
 Authority 持有 EAA 私钥和 registration/Grant ledger；signer 只接收配置的 EAA 公钥和 KMS adapter；node-agent 持有 worker identity key，不能持有 Kubernetes 管理员凭据。
@@ -81,7 +83,44 @@ Signer 使用的 Infisical key 必须处于 enabled 状态、用途为 `sign-ver
 
 旧的静态 `bindings` map 只保留给开发和 bootstrap 测试。只有显式传入 `--allow-static-bindings` 才能启用它；未配置 attestation 且未传该参数时，node-agent 会拒绝启动，不会静默选择静态 resolver。
 
-Authority 和 signer 默认监听 loopback，node-agent 默认监听 `unix:///var/run/sa-node-agent.sock`。非 loopback TCP listener 必须提供 `--tls-cert-file` 和 `--tls-key-file`；Unix socket 创建为 `0600`。这些参数只建立 server-side TLS；双向 TLS、服务身份、HA ledger、持久审计和 KMS 恢复仍是额外部署控制，本参考配置没有声称提供。
+Authority 和 signer 默认监听 loopback，node-agent 默认监听 `unix:///var/run/sa-node-agent.sock`。非 loopback TCP listener 必须提供 `--tls-cert-file` 和 `--tls-key-file`；Unix socket 创建为 `0600`。这些参数只建立 server-side TLS；node-agent 到 attestor 的 HTTPS 服务端 CA 和客户端证书通过 `attestation_ca_file`、`attestation_client_cert_file`、`attestation_client_key_file` 配置。
+
+## Kubernetes attestor
+
+生产 attestor 是独立的 `sa-attestor` 进程，不应复用 node-agent 的身份私钥：
+
+```bash
+go build ./cmd/sa-attestor
+./sa-attestor \
+  --listen-address=:9445 \
+  --tls-cert-file=/etc/issuance/tls/tls.crt \
+  --tls-key-file=/etc/issuance/tls/tls.key \
+  --client-ca-file=/etc/issuance/tls/client-ca.crt \
+  --attestor-identity=attestor-1 \
+  --attestor-key-file=/etc/issuance/attestor/attestor-key.pem \
+  --cluster-id=cluster-1 \
+  --issuer=https://issuer.example \
+  --token-generation=generation-1 \
+  --token-key-id=jwt-2026-01 \
+  --default-audience=https://kubernetes.default.svc \
+  --kube-api-token-file=/var/run/secrets/kubernetes.io/serviceaccount/token \
+  --kube-api-ca-file=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+```
+
+TCP listener 必须配置 server certificate、client CA 和 mTLS。`/healthz`、
+`/readyz` 可以不带客户端证书，但 `/v1/attest` 只接受经过配置的 client CA
+验证、且证书中包含请求 node identity 精确 DNS/IP/URI SAN 的请求；不接受
+Common Name。节点本地部署可以使用 `0600` 的 Unix socket。
+
+Attestor 只需要 Kubernetes API 对 `pods` 和 `serviceaccounts` 的 `get` 权限。
+它会校验 Pod UID、节点归属、ServiceAccount 名称和 UID，并解析完整嵌套的
+Kubernetes `TokenRequest`，包括 `istio-ca` 等全部 audience 和 expiration 上限。
+
+如果 attestor 跑在 workload cluster 外部，设置 `--kube-api-server` 为 HTTPS
+API server，并提供 `--kube-api-token-file` 和 `--kube-api-ca-file`。每次 API
+请求都会重新读取 bearer token，因此 projected token 轮换不需要重启 attestor。
+Attestor 可以部署在生产集群，也可以部署在外部集群；网络策略、证书 provision、
+密钥轮换、HA、审计持久化和可用性控制仍由部署平台负责。
 
 ## 协议边界
 
@@ -89,14 +128,14 @@ Authority 和 signer 默认监听 loopback，node-agent 默认监听 `unix:///va
 
 仍使用旧 API-server carrier 的迁移部署，需要把 authority 的 `grant_format` 设为 `legacy-token-grant`，把 signer 的 `allow_legacy_token_grant` 设为 `true`。此时 authority 返回旧的 canonical JSON `TokenGrant` object，signer 接受没有新的 `X-Issuance-Identity` header 的请求。SA adapter 校验旧的 `ed25519-v1:<key-id>:<signature>` envelope，保留旧 binding digest 语义，然后在进入公共 core pipeline 前转换为类型化 Grant。node-agent `/v1/token` 兼容 envelope 返回 Kubernetes 风格的 `status.token` 和 `status.expirationTimestamp` 字段。
 
-legacy 模式是显式开关，不能误开：它用于完成旧 carrier 迁移，新部署应使用 JWS。HA ledger、完整 mTLS identity provisioning、attestor 服务以及生产 KMS/audit 部署仍是独立的生产门禁。
+legacy 模式是显式开关，不能误开：它用于完成旧 carrier 迁移，新部署应使用 JWS。HA ledger、完整 mTLS identity provisioning 以及生产 KMS/audit 部署仍是独立的生产门禁。
 
 ## 验证
 
 ```bash
 GOCACHE=/tmp/k8s-credential-issuance-gocache go test ./...
 GOCACHE=/tmp/k8s-credential-issuance-vetcache go vet -buildvcs=false ./...
-GOCACHE=/tmp/k8s-credential-issuance-buildcache go build -buildvcs=false ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent
+GOCACHE=/tmp/k8s-credential-issuance-buildcache go build -buildvcs=false ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent ./cmd/sa-attestor
 ```
 
 受限测试环境可能不允许监听 TCP，因此仓库内 HTTP E2E 使用 handler transport；它仍覆盖 authority、signer、两种 Grant response shape、legacy 转换、Grant 校验、KMS 边界、ledger 恢复、Kubernetes TokenRequest envelope 和 node-agent 请求链路。

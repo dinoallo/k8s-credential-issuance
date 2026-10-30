@@ -369,7 +369,7 @@ Phase 0 已在契约/文档层面闭环。Phase 1 参考实现和可执行测试
 | 公共 core 模块和有序流水线 | `internal/issuance/core/**` 及 `go test ./...` | PASS |
 | SA authority、signer、node-agent、claims binding 和 direct flow | `internal/authority/domains/sa/**`、`internal/issuance/domains/sa/**`、`TestSignerRejectsClaimsThatDoNotMatchTheBinding` 及 `internal/issuance/domains/sa/e2e_test.go` | PASS |
 | 跨领域、fail-closed、并发、重启和精确重试 | `internal/issuance/core/*/*_test.go` 及 SA E2E test | PASS |
-| HA store、完整 mTLS identity provisioning、attestor 服务和生产 KMS/audit 部署 | Phase 4 部署控制 | OPEN |
+| HA store、生产 attestor 部署、完整 mTLS identity provisioning 和生产 KMS/audit 部署 | Phase 4 部署控制 | OPEN |
 | 旧 staging `TokenGrant` wire compatibility | `internal/issuance/domains/sa/legacy.go`、legacy authority/signer/node-agent E2E 及协议测试 | PASS |
 
 ### Phase 2：接入 CA

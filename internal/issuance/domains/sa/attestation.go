@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -34,6 +37,9 @@ type RemoteAttestationConfig struct {
 	Identity          string
 	AttestorIdentity  string
 	AttestorPublicKey ed25519.PublicKey
+	TLSCAFile         string
+	TLSCertFile       string
+	TLSKeyFile        string
 	HTTPClient        *http.Client
 	Replay            replay.Store
 	Now               func() time.Time
@@ -58,7 +64,7 @@ func NewRemoteAttestationResolver(config RemoteAttestationConfig) (*RemoteAttest
 	if config.Identity == "" || config.AttestorIdentity == "" || len(config.AttestorPublicKey) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("remote attestation resolver configuration is incomplete")
 	}
-	endpoint, client, err := newAttestationClient(config.Endpoint, config.HTTPClient)
+	endpoint, client, err := newAttestationClient(config.Endpoint, config.HTTPClient, config.TLSCAFile, config.TLSCertFile, config.TLSKeyFile)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +251,7 @@ func sortedUniqueAudience(values []string) bool {
 	return true
 }
 
-func newAttestationClient(endpoint string, client *http.Client) (*url.URL, *coretransport.Client, error) {
+func newAttestationClient(endpoint string, client *http.Client, caFile, certFile, keyFile string) (*url.URL, *coretransport.Client, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse attestation endpoint: %w", err)
@@ -255,6 +261,9 @@ func newAttestationClient(endpoint string, client *http.Client) (*url.URL, *core
 	}
 	switch parsed.Scheme {
 	case "unix":
+		if caFile != "" || certFile != "" || keyFile != "" {
+			return nil, nil, fmt.Errorf("TLS files cannot be used with a Unix attestation endpoint")
+		}
 		if parsed.Host != "" || parsed.Path == "" || !filepath.IsAbs(parsed.Path) || filepath.Clean(parsed.Path) != parsed.Path {
 			return nil, nil, fmt.Errorf("attestation Unix endpoint must contain a clean absolute socket path")
 		}
@@ -282,6 +291,9 @@ func newAttestationClient(endpoint string, client *http.Client) (*url.URL, *core
 		if parsed.Scheme == "http" && !attestationLoopbackHost(parsed.Hostname()) {
 			return nil, nil, fmt.Errorf("attestation HTTP endpoint must use a loopback host")
 		}
+		if parsed.Scheme == "http" && (caFile != "" || certFile != "" || keyFile != "") {
+			return nil, nil, fmt.Errorf("TLS files require an HTTPS attestation endpoint")
+		}
 		if parsed.Path == "" {
 			parsed.Path = defaultAttestationPath
 		}
@@ -292,8 +304,65 @@ func newAttestationClient(endpoint string, client *http.Client) (*url.URL, *core
 		client = &http.Client{Timeout: defaultAttestationTimeout}
 	}
 	clientCopy := *client
+	if parsed.Scheme == "https" {
+		configured, err := withAttestationTLS(clientCopy.Transport, caFile, certFile, keyFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		clientCopy.Transport = configured
+	}
 	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 	return parsed, coretransport.NewClient(&clientCopy, defaultAttestationMaxBody), nil
+}
+
+func withAttestationTLS(roundTripper http.RoundTripper, caFile, certFile, keyFile string) (http.RoundTripper, error) {
+	if (certFile == "") != (keyFile == "") {
+		return nil, fmt.Errorf("attestation TLS certificate and key must be provided together")
+	}
+	if caFile == "" && certFile == "" {
+		return roundTripper, nil
+	}
+	base, ok := roundTripper.(*http.Transport)
+	if roundTripper != nil && !ok {
+		return nil, fmt.Errorf("attestation TLS files require an *http.Transport")
+	}
+	if base == nil {
+		if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+			base = defaultTransport
+		} else {
+			base = &http.Transport{}
+		}
+	}
+	transport := base.Clone()
+	tlsConfig := transport.TLSClientConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+	}
+	if tlsConfig.MinVersion < tls.VersionTLS13 {
+		tlsConfig.MinVersion = tls.VersionTLS13
+	}
+	if caFile != "" {
+		caData, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read attestation server CA: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(caData) {
+			return nil, fmt.Errorf("parse attestation server CA")
+		}
+		tlsConfig.RootCAs = roots
+	}
+	if certFile != "" {
+		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load attestation client certificate: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{certificate}
+	}
+	transport.TLSClientConfig = tlsConfig
+	return transport, nil
 }
 
 func attestationLoopbackHost(host string) bool {

@@ -1,13 +1,13 @@
 # Helm 部署
 
-仓库在 [`charts/k8s-credential-issuance`](../../charts/k8s-credential-issuance/) 提供了参考 Helm Chart，用于把当前的 `sa-authority`、`sa-signer` 和 `sa-node-agent` 命令二进制部署为 Kubernetes 工作负载。
+仓库在 [`charts/k8s-credential-issuance`](../../charts/k8s-credential-issuance/) 提供了参考 Helm Chart，用于把当前的 `sa-authority`、`sa-signer`、`sa-attestor` 和 `sa-node-agent` 命令二进制部署为 Kubernetes 工作负载。
 
 Chart README 包含安装示例、values 结构、Secret 处理、TLS 设置、node-agent socket 接入方式，以及文件型参考存储的限制：
 
 - [Chart README](../../charts/k8s-credential-issuance/README.zh-CN.md)
 - [ServiceAccount 部署参考](./sa-issuance.zh-CN.md)
 
-这个 Chart 有意不宣称提供 HA 或生产就绪能力。在隔离的参考环境之外使用前，请配置外部 KMS、attestation 服务、mTLS 身份、持久审计链路和支持事务的 ledger。
+这个 Chart 有意不宣称提供 HA 或生产就绪能力。在隔离的参考环境之外使用前，请配置外部 KMS、mTLS 身份、持久审计链路和支持事务的 ledger。启用 attestor 后，Chart 会创建独立 ServiceAccount，并只授予 Pods 和 ServiceAccounts 的 `get` 权限；proof key 和 mTLS 材料仍需由部署平台 provisioning。
 
 ## Authority 签名私钥 Secret
 
@@ -84,6 +84,8 @@ kubectl -n issuance create secret generic \
        nginx.ingress.kubernetes.io/backend-protocol: HTTPS
    nodeAgent:
      enabled: false
+   attestor:
+     enabled: false
    ```
 
    ```bash
@@ -92,18 +94,29 @@ kubectl -n issuance create secret generic \
      --values ./values-issuance.yaml
    ```
 
-2. 在每个业务集群中只安装 node-agent，并为外部服务设置明确的 HTTPS endpoint：
+2. 在每个业务集群中安装 node-agent；如果 attestor 也运行在业务集群，则同时启用它并配置 Kubernetes API RBAC 和 mTLS Secret：
 
    ```yaml
    authority:
      enabled: false
    signer:
      enabled: false
+   attestor:
+     enabled: true
+     tls:
+       enabled: true
+       secretName: sa-attestor-tls
+     attestorKey:
+       secretName: sa-attestor-key
    nodeAgent:
      enabled: true
+     attestationTLS:
+       enabled: true
+       secretName: sa-node-attestor-tls
      config:
        authority_endpoint: https://sa-authority.issuance.example/v1/grants
        signer_endpoint: https://sa-signer.issuance.example/v1/sign
+       attestation_endpoint: https://kci-node-agent-k8s-credential-issuance-attestor:9445/v1/attest
    ```
 
    ```bash
@@ -112,6 +125,6 @@ kubectl -n issuance create secret generic \
      --values ./values-node-agent.yaml
    ```
 
-默认 endpoint helper 假设所有组件共享同一个 release 和 Namespace，拆分 release 后必须覆盖 endpoint。如果是不同集群，请通过内部 LoadBalancer、Gateway 或等价私有网络路径暴露 issuance 服务；ClusterIP 和 `*.svc.cluster.local` 地址不能作为跨集群 endpoint。Authority/signer Secret 应创建在 issuance 集群，每个业务集群创建自己的 node identity Secret。当前 Chart 的一个 node-agent DaemonSet 使用同一份配置的 identity 和 key；如果需要每节点独立身份，还需要额外的身份注入机制或拆分 release。
+默认 endpoint helper 假设所有组件共享同一个 release 和 Namespace，拆分 release 后必须覆盖 endpoint。如果是不同集群，请通过内部 LoadBalancer、Gateway 或等价私有网络路径暴露 issuance 服务；ClusterIP 和 `*.svc.cluster.local` 地址不能作为跨集群 endpoint。Authority/signer Secret 应创建在 issuance 集群，业务集群创建 attestor、node-agent attestation 和 node identity Secret。当前 Chart 的一个 node-agent DaemonSet 使用同一份配置的 identity 和 key；如果需要每节点独立身份，还需要额外的身份注入机制或拆分 release。
 
 当 `ingress.enabled: true` 时，Chart 会为 authority 和 signer host 创建标准的 `networking.k8s.io/v1` Ingress。Ingress controller 和 TLS Secret 必须由集群平台提供；Chart 不会安装这两者。如果 authority 和 signer Service 使用 HTTPS，还需要设置对应 Ingress controller 的 backend protocol annotation。

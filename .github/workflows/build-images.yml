@@ -32,6 +32,7 @@ jobs:
           - sa-authority
           - sa-signer
           - sa-node-agent
+          - sa-attestor
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -78,6 +79,7 @@ jobs:
           - sa-authority
           - sa-signer
           - sa-node-agent
+          - sa-attestor
     steps:
       - name: Check out source
         uses: actions/checkout@v4

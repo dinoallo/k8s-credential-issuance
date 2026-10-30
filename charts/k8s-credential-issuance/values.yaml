@@ -198,6 +198,85 @@ signer:
   extraVolumeMounts: []
   terminationGracePeriodSeconds: 30
 
+attestor:
+  # Production attestation is opt-in because it requires a dedicated proof
+  # key, mTLS material, and a Kubernetes RBAC binding.
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ""
+    tag: latest
+    pullPolicy: ""
+  listenAddress: ":9445"
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 9445
+    targetPort: 9445
+    annotations: {}
+  tls:
+    enabled: true
+    secretName: ""
+    create: false
+    cert: ""
+    key: ""
+    clientCA: ""
+    certKey: tls.crt
+    keyKey: tls.key
+    clientCAKey: client-ca.crt
+    certFile: /etc/k8s-credential-issuance/tls/tls.crt
+    keyFile: /etc/k8s-credential-issuance/tls/tls.key
+    clientCAFile: /etc/k8s-credential-issuance/tls/client-ca.crt
+  attestorKey:
+    secretName: ""
+    create: false
+    key: attestor-key.pem
+    value: ""
+    mountPath: /etc/k8s-credential-issuance/attestor-secrets
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  rbac:
+    create: true
+  config:
+    attestor_identity: attestor-1
+    cluster_id: cluster-1
+    issuer: https://issuer.example
+    token_generation: generation-1
+    token_key_id: jwt-2026-01
+    default_audience: api
+    max_token_lifetime: 1h
+  kubeAPI:
+    server: ""
+    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  probes:
+    enabled: true
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  terminationGracePeriodSeconds: 30
+
 nodeAgent:
   enabled: true
   image:
@@ -227,9 +306,12 @@ nodeAgent:
     authority_endpoint: ""
     signer_endpoint: ""
     identity: worker-1
-    attestation_endpoint: https://attestor.example/v1/attest
+    attestation_endpoint: ""
     attestation_identity: node-attestor-1
     attestation_public_key: REPLACE_BASE64URL_ED25519_PUBLIC_KEY
+    attestation_ca_file: ""
+    attestation_client_cert_file: ""
+    attestation_client_key_file: ""
     bindings: {}
   identityKey:
     secretName: ""
@@ -237,6 +319,20 @@ nodeAgent:
     key: worker-1.pem
     value: ""
     mountPath: /etc/k8s-credential-issuance/node-agent-secrets
+  attestationTLS:
+    enabled: false
+    secretName: ""
+    create: false
+    ca: ""
+    cert: ""
+    key: ""
+    caKey: ca.crt
+    certKey: tls.crt
+    keyKey: tls.key
+    caFile: /etc/k8s-credential-issuance/attestor-tls/ca.crt
+    certFile: /etc/k8s-credential-issuance/attestor-tls/tls.crt
+    keyFile: /etc/k8s-credential-issuance/attestor-tls/tls.key
+    mountPath: /etc/k8s-credential-issuance/attestor-tls
   socket:
     hostPath: /var/run/k8s-credential-issuance
     mountPath: /var/run/k8s-credential-issuance

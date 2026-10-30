@@ -61,9 +61,18 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end }}
 
+{{/* The attestor needs a projected Kubernetes API token, unlike the other processes. */}}
+{{- define "kci.attestorServiceAccountName" -}}
+{{- if .Values.attestor.serviceAccount.create }}
+{{- default (printf "%s-attestor" (include "kci.fullname" .)) .Values.attestor.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.attestor.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
 {{/* Image names follow the repositories built by .github/workflows/build-images.yml. */}}
 {{- define "kci.image" -}}
-{{- $defaultImages := dict "authority" "sa-authority" "signer" "sa-signer" "nodeAgent" "sa-node-agent" -}}
+{{- $defaultImages := dict "authority" "sa-authority" "signer" "sa-signer" "attestor" "sa-attestor" "nodeAgent" "sa-node-agent" -}}
 {{- $registry := trimSuffix "/" .root.Values.global.imageRegistry -}}
 {{- $repository := printf "%s/%s" $registry (index $defaultImages .component) -}}
 {{- if .image.repository }}
@@ -84,12 +93,21 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s://%s:%v" $scheme (include "kci.componentName" (dict "root" . "component" "signer")) .Values.signer.service.port }}
 {{- end }}
 
+{{- define "kci.attestorURL" -}}
+{{- $scheme := ternary "https" "http" .Values.attestor.tls.enabled -}}
+{{- printf "%s://%s:%v" $scheme (include "kci.componentName" (dict "root" . "component" "attestor")) .Values.attestor.service.port }}
+{{- end }}
+
 {{- define "kci.authorityEndpoint" -}}
 {{- printf "%s/v1/grants" (include "kci.authorityURL" .) }}
 {{- end }}
 
 {{- define "kci.signerEndpoint" -}}
 {{- printf "%s/v1/sign" (include "kci.signerURL" .) }}
+{{- end }}
+
+{{- define "kci.attestorEndpoint" -}}
+{{- printf "%s/v1/attest" (include "kci.attestorURL" .) }}
 {{- end }}
 
 {{- define "kci.revocationEndpoint" -}}
@@ -121,14 +139,28 @@ app.kubernetes.io/component: {{ .component }}
 {{- default (printf "%s-node-agent-tls" (include "kci.fullname" .)) .Values.nodeAgent.tls.secretName }}
 {{- end }}
 
+{{- define "kci.attestorKeySecretName" -}}
+{{- default (printf "%s-attestor-key" (include "kci.fullname" .)) .Values.attestor.attestorKey.secretName }}
+{{- end }}
+
+{{- define "kci.attestorTLSSecretName" -}}
+{{- default (printf "%s-attestor-tls" (include "kci.fullname" .)) .Values.attestor.tls.secretName }}
+{{- end }}
+
+{{- define "kci.nodeAttestationTLSSecretName" -}}
+{{- default (printf "%s-node-attestor-tls" (include "kci.fullname" .)) .Values.nodeAgent.attestationTLS.secretName }}
+{{- end }}
+
 {{/* Map an ingress host's logical backend to a chart Service. */}}
 {{- define "kci.ingressServiceName" -}}
 {{- if eq .service "authority" }}
 {{- include "kci.componentName" (dict "root" .root "component" "authority") }}
 {{- else if eq .service "signer" }}
 {{- include "kci.componentName" (dict "root" .root "component" "signer") }}
+{{- else if eq .service "attestor" }}
+{{- include "kci.componentName" (dict "root" .root "component" "attestor") }}
 {{- else }}
-{{- fail (printf "unsupported ingress service %q; use authority or signer" .service) }}
+{{- fail (printf "unsupported ingress service %q; use authority, signer, or attestor" .service) }}
 {{- end }}
 {{- end }}
 
@@ -137,8 +169,10 @@ app.kubernetes.io/component: {{ .component }}
 {{- .root.Values.authority.service.port }}
 {{- else if eq .service "signer" }}
 {{- .root.Values.signer.service.port }}
+{{- else if eq .service "attestor" }}
+{{- .root.Values.attestor.service.port }}
 {{- else }}
-{{- fail (printf "unsupported ingress service %q; use authority or signer" .service) }}
+{{- fail (printf "unsupported ingress service %q; use authority, signer, or attestor" .service) }}
 {{- end }}
 {{- end }}
 
@@ -189,15 +223,49 @@ app.kubernetes.io/component: {{ .component }}
 {{- $root := . -}}
 {{- $authorityEndpoint := default (include "kci.authorityEndpoint" $root) $root.Values.nodeAgent.config.authority_endpoint -}}
 {{- $signerEndpoint := default (include "kci.signerEndpoint" $root) $root.Values.nodeAgent.config.signer_endpoint -}}
+{{- $attestationEndpoint := $root.Values.nodeAgent.config.attestation_endpoint -}}
+{{- if and (empty $attestationEndpoint) $root.Values.attestor.enabled }}
+{{- $attestationEndpoint = include "kci.attestorEndpoint" $root -}}
+{{- end }}
+{{- $attestationCAFile := $root.Values.nodeAgent.config.attestation_ca_file -}}
+{{- $attestationCertFile := $root.Values.nodeAgent.config.attestation_client_cert_file -}}
+{{- $attestationKeyFile := $root.Values.nodeAgent.config.attestation_client_key_file -}}
+{{- if $root.Values.nodeAgent.attestationTLS.enabled }}
+{{- $attestationCAFile = default $root.Values.nodeAgent.attestationTLS.caFile $attestationCAFile -}}
+{{- $attestationCertFile = default $root.Values.nodeAgent.attestationTLS.certFile $attestationCertFile -}}
+{{- $attestationKeyFile = default $root.Values.nodeAgent.attestationTLS.keyFile $attestationKeyFile -}}
+{{- end }}
 {{- $config := dict
   "authority_endpoint" $authorityEndpoint
   "signer_endpoint" $signerEndpoint
   "identity" $root.Values.nodeAgent.config.identity
   "identity_key_file" (printf "%s/%s" (trimSuffix "/" $root.Values.nodeAgent.identityKey.mountPath) $root.Values.nodeAgent.identityKey.key)
-  "attestation_endpoint" $root.Values.nodeAgent.config.attestation_endpoint
+  "attestation_endpoint" $attestationEndpoint
   "attestation_identity" $root.Values.nodeAgent.config.attestation_identity
   "attestation_public_key" $root.Values.nodeAgent.config.attestation_public_key
+  "attestation_ca_file" $attestationCAFile
+  "attestation_client_cert_file" $attestationCertFile
+  "attestation_client_key_file" $attestationKeyFile
   "bindings" (default (dict) $root.Values.nodeAgent.config.bindings)
+-}}
+{{- toPrettyJson $config -}}
+{{- end }}
+
+{{- define "kci.attestorConfig" -}}
+{{- $root := . -}}
+{{- $config := dict
+  "attestor_identity" $root.Values.attestor.config.attestor_identity
+  "cluster_id" $root.Values.attestor.config.cluster_id
+  "issuer" $root.Values.attestor.config.issuer
+  "token_generation" $root.Values.attestor.config.token_generation
+  "token_key_id" $root.Values.attestor.config.token_key_id
+  "default_audience" $root.Values.attestor.config.default_audience
+  "max_token_lifetime" $root.Values.attestor.config.max_token_lifetime
+  "kube_api_server" $root.Values.attestor.kubeAPI.server
+  "kube_api_token_file" $root.Values.attestor.kubeAPI.tokenFile
+  "kube_api_ca_file" $root.Values.attestor.kubeAPI.caFile
+  "listen_address" $root.Values.attestor.listenAddress
+  "tls_enabled" $root.Values.attestor.tls.enabled
 -}}
 {{- toPrettyJson $config -}}
 {{- end }}

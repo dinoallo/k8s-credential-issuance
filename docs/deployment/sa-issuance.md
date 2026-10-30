@@ -2,9 +2,10 @@
 
 This repository contains a reference SA path for the frozen `issuance/v1`
 contract. It is suitable for local integration and security-contract tests;
-the file-backed stores and the attestation service are not an HA production
-deployment. The node-agent's signed remote-attestation resolver is implemented,
-but its attestor and deployment controls remain environment-specific.
+the file-backed stores are not an HA production deployment. The repository now
+includes `sa-attestor`, a Kubernetes-backed reference attestor with read-only
+API access and an mTLS TCP boundary; HA storage and certificate/key
+provisioning remain deployment-platform responsibilities.
 
 ## Processes and trust boundaries
 
@@ -12,12 +13,14 @@ but its attestor and deployment controls remain environment-specific.
 sa-node-agent --(worker proof)--> sa-authority --(Grant adapter)--> sa-signer
        |                                                               |
        +-- local Unix socket / TokenProvider API                         +-- constrained KMS
+        |
+        +-- mTLS attestation request --> sa-attestor --(read-only)--> Kubernetes API
 ```
 
-Build the three independently deployed processes with:
+Build the independently deployed processes with:
 
 ```bash
-go build ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent
+go build ./cmd/sa-authority ./cmd/sa-signer ./cmd/sa-node-agent ./cmd/sa-attestor
 ```
 
 The authority owns the EAA private key and the registration/Grant ledger. The
@@ -138,7 +141,10 @@ Node-agent (`sa-node-agent`):
   "identity_key_file": "secrets/worker-1.pem",
   "attestation_endpoint": "https://attestor.example/v1/attest",
   "attestation_identity": "node-attestor-1",
-  "attestation_public_key": "REPLACE_BASE64URL_ED25519_PUBLIC_KEY"
+  "attestation_public_key": "REPLACE_BASE64URL_ED25519_PUBLIC_KEY",
+  "attestation_ca_file": "secrets/attestor-ca.crt",
+  "attestation_client_cert_file": "secrets/node-1-attestor.crt",
+  "attestation_client_key_file": "secrets/node-1-attestor.key"
 }
 ```
 
@@ -158,10 +164,53 @@ to start rather than silently selecting a static resolver.
 Default listeners are loopback for the authority and signer and
 `unix:///var/run/sa-node-agent.sock` for the node-agent. A non-loopback TCP
 listener requires `--tls-cert-file` and `--tls-key-file`; the Unix socket is
-created with mode `0600`. These flags establish server-side TLS. Mutual TLS,
-service-identity provisioning, HA ledgers, durable audit storage, and KMS
-recovery are additional deployment controls and are not supplied by the
-file-backed reference configuration.
+created with mode `0600`. These flags establish server-side TLS. The
+node-agent-to-attestor HTTPS connection can use a pinned CA and client
+certificate through the three `attestation_*_file` fields above.
+
+## Kubernetes attestor
+
+Build and run the production attestor separately from the node-agent:
+
+```bash
+go build ./cmd/sa-attestor
+./sa-attestor \
+  --listen-address=:9445 \
+  --tls-cert-file=/etc/issuance/tls/tls.crt \
+  --tls-key-file=/etc/issuance/tls/tls.key \
+  --client-ca-file=/etc/issuance/tls/client-ca.crt \
+  --attestor-identity=attestor-1 \
+  --attestor-key-file=/etc/issuance/attestor/attestor-key.pem \
+  --cluster-id=cluster-1 \
+  --issuer=https://issuer.example \
+  --token-generation=generation-1 \
+  --token-key-id=jwt-2026-01 \
+  --default-audience=https://kubernetes.default.svc \
+  --kube-api-token-file=/var/run/secrets/kubernetes.io/serviceaccount/token \
+  --kube-api-ca-file=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+```
+
+The TCP listener requires a serving certificate, a client CA, and mTLS. The
+`/healthz` and `/readyz` probes may omit a client certificate, but
+`/v1/attest` rejects requests unless the verified client certificate contains
+the requested node identity as an exact DNS, IP, or URI SAN; Common Name is
+not accepted. A Unix listener may be used for a node-local deployment and is
+created with mode `0600`.
+
+The attestor key is an independent Ed25519 proof key. Publish only its public
+key to node-agent configuration; never reuse a node-agent identity key. The
+attestor reads only `pods` and `serviceaccounts` with the Kubernetes API
+`get` verb. It verifies the Pod UID, node name, ServiceAccount name and
+ServiceAccount UID, and parses the complete nested Kubernetes `TokenRequest`
+including all requested audiences and the expiration limit.
+
+For an attestor outside the workload cluster, set `--kube-api-server` to an
+HTTPS API server and provide `--kube-api-token-file` and
+`--kube-api-ca-file`. The bearer token file is read for every API request so a
+projected token can rotate without restarting the attestor. The attestor may
+run in the workload cluster or in an external cluster; network policy,
+certificate provisioning, key rotation, HA, durable audit storage, and
+availability controls remain deployment-platform responsibilities.
 
 ## Protocol boundary
 
@@ -183,8 +232,8 @@ Kubernetes-shaped `status.token` and `status.expirationTimestamp` fields.
 
 The legacy mode is explicit and must not be enabled accidentally: it exists to
 complete migration of the old carrier, while new deployments should use JWS.
-HA ledgers, complete mTLS identity provisioning, the attestation service, and
-production KMS/audit deployment remain separate production gates.
+HA ledgers, complete mTLS identity provisioning, and production KMS/audit
+deployment remain separate production gates.
 
 ## Verification
 

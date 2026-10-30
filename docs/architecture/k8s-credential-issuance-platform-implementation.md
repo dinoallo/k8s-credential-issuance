@@ -406,7 +406,7 @@ is not approved by this record.
 | Common core modules and ordered pipeline | `internal/issuance/core/**` and `go test ./...` | PASS |
 | SA authority, signer, node-agent, strict claims binding, and direct flow | `internal/authority/domains/sa/**`, `internal/issuance/domains/sa/**`, `TestSignerRejectsClaimsThatDoNotMatchTheBinding`, and `internal/issuance/domains/sa/e2e_test.go` | PASS |
 | Cross-domain, fail-closed, concurrency, restart, and exact-retry behavior | `internal/issuance/core/*/*_test.go` and SA E2E test | PASS |
-| HA stores, complete mTLS identity provisioning, attestation service, and production KMS/audit deployment | Phase 4 deployment controls | OPEN |
+| HA stores, production attestor deployment, complete mTLS identity provisioning, and production KMS/audit deployment | Phase 4 deployment controls | OPEN |
 | Legacy staging `TokenGrant` wire compatibility | `internal/issuance/domains/sa/legacy.go`, legacy authority/signer/node-agent E2E and protocol tests | PASS |
 
 ### Phase 2: Add CA

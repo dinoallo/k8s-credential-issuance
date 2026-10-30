@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -207,16 +208,30 @@ func Run(ctx context.Context, listener net.Listener, handler http.Handler, certF
 			return fmt.Errorf("load TLS certificate: %w", err)
 		}
 	}
+	return RunWithTLSConfig(ctx, listener, handler, tlsConfig)
+}
+
+// RunWithTLSConfig serves an external component until the context is
+// cancelled. When tlsConfig is non-nil, the listener is wrapped in a TLS
+// listener before serving. The config is cloned so the caller can safely
+// reuse its template after the server starts.
+func RunWithTLSConfig(ctx context.Context, listener net.Listener, handler http.Handler, tlsConfig *tls.Config) error {
+	if listener == nil || handler == nil {
+		return fmt.Errorf("HTTP server listener and handler are required")
+	}
+	if tlsConfig != nil {
+		tlsConfig = tlsConfig.Clone()
+		if tlsConfig.MinVersion == 0 {
+			tlsConfig.MinVersion = tls.VersionTLS13
+		}
+		listener = tls.NewListener(listener, tlsConfig)
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	server := &http.Server{Handler: handler, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	errors := make(chan error, 1)
 	go func() {
-		if certFile != "" && keyFile != "" {
-			errors <- server.ServeTLS(listener, certFile, keyFile)
-			return
-		}
 		errors <- server.Serve(listener)
 	}()
 	select {
@@ -244,4 +259,32 @@ func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 		return nil, err
 	}
 	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}}, nil
+}
+
+// NewMTLSConfig creates a server TLS configuration that verifies client
+// certificates when they are presented. Health endpoints can therefore be
+// probed without a client certificate, while an application handler can
+// require and authorize the verified certificate for sensitive requests.
+func NewMTLSConfig(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
+	if certFile == "" || keyFile == "" || clientCAFile == "" {
+		return nil, fmt.Errorf("TLS certificate, key, and client CA are all required")
+	}
+	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	caData, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read TLS client CA: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caData) {
+		return nil, fmt.Errorf("parse TLS client CA")
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{certificate},
+		ClientAuth:   tls.VerifyClientCertIfGiven,
+		ClientCAs:    clientCAs,
+	}, nil
 }

@@ -1,20 +1,21 @@
 # k8s-credential-issuance Helm Chart
 
-这个 Chart 部署仓库当前实际包含的三个可运行组件：
+这个 Chart 部署仓库当前实际包含的可运行组件：
 
 | 组件 | Kubernetes 工作负载 | 默认端点 |
 | --- | --- | --- |
 | `sa-authority` | 单副本 Deployment 和 ClusterIP Service | `http://<release>-k8s-credential-issuance-authority:9441` |
 | `sa-signer` | 单副本 Deployment 和 ClusterIP Service | `http://<release>-k8s-credential-issuance-signer:9444` |
+| `sa-attestor` | 可选 Deployment，只读 Kubernetes API 和 ClusterIP Service | `https://<release>-k8s-credential-issuance-attestor:9445` |
 | `sa-node-agent` | 带节点本地 Unix socket 的 DaemonSet | `/var/run/k8s-credential-issuance/sa-node-agent.sock` |
 
-这个 Chart 是参考实现的部署封装，不会把文件型 ledger 自动变成 HA 存储，也不会自动提供 attestation 服务、KMS、mTLS 身份或 Kubernetes TokenProvider 集成。
+这个 Chart 是参考实现的部署封装，不会把文件型 ledger 自动变成 HA 存储，也不会自动提供外部证书/密钥轮换或 Kubernetes TokenProvider 集成。Attestor 默认关闭，启用时必须显式配置 proof key、mTLS 和 RBAC。
 
 ## 前置条件
 
 - Helm 3.12 或更高版本。
 - 满足 Chart `kubeVersion` 约束的 Kubernetes 集群。
-- 仓库 workflow 已发布的三个容器镜像，或为三个镜像配置自定义 repository。
+- 仓库 workflow 已发布的组件容器镜像，或为镜像配置自定义 repository。
 - Authority Ed25519 签名私钥、每个 node-agent identity 对应的身份私钥，以及正常 signer 路径使用的 Infisical KMS token。
 
 ## Authority 签名私钥 Secret
@@ -83,6 +84,16 @@ kubectl -n issuance create secret generic \
 ```bash
 kubectl -n issuance create secret generic kci-node-identity \
   --from-file=worker-1.pem=./worker-1.pem
+kubectl -n issuance create secret generic kci-attestor-key \
+  --from-file=attestor-key.pem=./attestor-key.pem
+kubectl -n issuance create secret generic kci-attestor-tls \
+  --from-file=tls.crt=./attestor.crt \
+  --from-file=tls.key=./attestor.key \
+  --from-file=client-ca.crt=./node-agent-client-ca.crt
+kubectl -n issuance create secret generic kci-node-attestor-tls \
+  --from-file=ca.crt=./attestor-ca.crt \
+  --from-file=tls.crt=./node-1-attestor.crt \
+  --from-file=tls.key=./node-1-attestor.key
 ```
 
 在私有 values 文件中设置 Secret 名称，以及真实的 policy、registration、generation、KMS 和 attestation 参数：
@@ -117,11 +128,31 @@ signer:
 nodeAgent:
   identityKey:
     secretName: kci-node-identity
+  attestationTLS:
+    enabled: true
+    secretName: kci-node-attestor-tls
   config:
     identity: worker-1
-    attestation_endpoint: https://attestor.example/v1/attest
+    attestation_endpoint: https://kci-k8s-credential-issuance-attestor:9445/v1/attest
     attestation_identity: node-attestor-1
     attestation_public_key: REPLACE_BASE64URL_ED25519_PUBLIC_KEY
+
+attestor:
+  enabled: true
+  attestorKey:
+    secretName: kci-attestor-key
+  tls:
+    enabled: true
+    secretName: kci-attestor-tls
+  config:
+    attestor_identity: node-attestor-1
+    cluster_id: cluster-1
+    issuer: https://issuer.example
+    token_generation: generation-1
+    token_key_id: jwt-2026-01
+    default_audience: https://kubernetes.default.svc
+  serviceAccount:
+    name: kci-attestor
 ```
 
 安装或升级 release：
@@ -147,17 +178,23 @@ helm upgrade --install kci ./charts/k8s-credential-issuance \
 
 Chart 管理私钥的方式只适用于受控测试环境。生产环境请在 Helm 外部创建 authority Secret，避免私钥被保存到 Helm release values 或 metadata 中。
 
+受控测试部署还需要设置 `attestor.enabled=true`、
+`attestor.attestorKey.create=true`，以及 `attestor.tls` 和
+`nodeAgent.attestationTLS` 下的三个 `--set-file`。生产环境是否允许由
+Chart 管理私钥，应遵循外围 Secret 管理策略。
+
 生产环境请为 authority 和 signer 启用 TLS，引用预先创建的
 `kubernetes.io/tls` Secret，并确保证书包含对应的 Service DNS 名称。默认 HTTP listener 只适用于隔离开发环境。node-agent 默认使用 hostPath 支持的 Unix socket；请将 `nodeAgent.socket.hostPath` 设置为批准的节点路径，并把该路径接入实际消费此 socket 的本地 Kubernetes 组件。
 
 ## 生产集群与外部 issuance 集群分离部署
 
-推荐的生产拓扑是：把 issuance 服务放在独立的 issuance 集群中，在每个业务集群中运行 node-agent DaemonSet：
+推荐的生产拓扑是：把 issuance 服务放在独立的 issuance 集群中，在每个业务集群中运行 node-agent DaemonSet 和 Kubernetes attestor：
 
 ```text
 业务集群                                  issuance 集群
 sa-node-agent DaemonSet -- HTTPS -->      sa-authority Service
-                                      \--> sa-signer Service
+       |                              \--> sa-signer Service
+       \--> sa-attestor -- Kubernetes API（只读）
 ```
 
 使用两个 Helm release。issuance 集群的 values 关闭 DaemonSet：
@@ -205,6 +242,9 @@ ingress:
 
 nodeAgent:
   enabled: false
+
+attestor:
+  enabled: false
 ```
 
 在 issuance 集群创建 authority 签名私钥、signer KMS token 和 TLS Secret 后安装：
@@ -230,6 +270,9 @@ signer:
 
 nodeAgent:
   enabled: true
+  attestationTLS:
+    enabled: true
+    secretName: sa-node-attestor-tls
   config:
     authority_endpoint: https://sa-authority.issuance.example/v1/grants
     signer_endpoint: https://sa-signer.issuance.example/v1/sign
@@ -239,6 +282,21 @@ nodeAgent:
     attestation_public_key: REPLACE_BASE64URL_ED25519_PUBLIC_KEY
   identityKey:
     secretName: sa-node-identity
+
+attestor:
+  enabled: true
+  attestorKey:
+    secretName: sa-attestor-key
+  tls:
+    enabled: true
+    secretName: sa-attestor-tls
+  config:
+    attestor_identity: node-attestor-1
+    cluster_id: cluster-1
+    issuer: https://issuer.example
+    token_generation: generation-1
+    token_key_id: jwt-2026-01
+    default_audience: https://kubernetes.default.svc
 ```
 
 在业务集群创建 node identity Secret 后安装：
@@ -253,12 +311,12 @@ helm upgrade --install kci-node-agent ./charts/k8s-credential-issuance \
 `https://kci-issuance-k8s-credential-issuance-authority.issuance.svc.cluster.local:9441/v1/grants`。
 如果是不同集群，ClusterIP Service 和 `*.svc.cluster.local` 名称不可路由；请通过内部 LoadBalancer、Gateway 或等价网络路径发布稳定的私有 DNS，并在 node-agent values 中使用这些名称。Chart 不会创建跨集群网络路径。
 
-当前二进制和 Chart 只提供 server-side TLS；客户端证书、自定义 CA bundle 和完整 mTLS 身份 provisioning 必须由外围平台提供。还需要注意，一个 node-agent DaemonSet 当前会在所有节点挂载同一份配置的 `identity` 和 identity-key Secret；如果需要每节点独立身份，需要拆分 node pool/release，或增加节点本地的身份注入机制。
+Authority、signer 和 node-agent server endpoint 提供 server-side TLS；客户端证书、自定义 CA bundle 和完整 mTLS identity provisioning 必须由外围平台提供。启用 `attestor.enabled` 后，Chart 会创建独立 ServiceAccount、ClusterRole 和 ClusterRoleBinding，只授予 Pods 和 ServiceAccounts 的 `get` 权限。Attestor TCP endpoint 必须配置 serving certificate、client CA 和 node-agent client certificate；`/healthz`、`/readyz` 仍可不带客户端证书探测。还需要注意，一个 node-agent DaemonSet 当前会在所有节点挂载同一份配置的 `identity` 和 identity-key Secret；如果需要每节点独立身份，需要拆分 node pool/release，或增加节点本地的身份注入机制。
 
 ## 配置与扩缩容
 
 - Authority 和 signer 默认使用独立 PVC 保存状态。使用仓库内置文件型 store 时请保持单副本；扩容前必须替换为支持事务的共享 backend。
-- `authority.config.registrations`、`signer.config.key_generations` 和 `nodeAgent.config` 会直接映射到二进制读取的 JSON 配置；Chart 会补充挂载文件路径和集群内 Service URL。
+- `authority.config.registrations`、`signer.config.key_generations`、`attestor.config` 和 `nodeAgent.config` 会映射到二进制配置；Chart 会补充挂载文件路径和集群内 Service URL。
 - `signer.allowLocalKeyProvider` 和 `nodeAgent.allowStaticBindings` 是仅用于开发的逃生开关，生产环境应保持关闭。
 - 当前代码树没有 `ca-*` 或 `etcd-*` 命令二进制，因此本 Chart 不会为这些计划中的组件创建工作负载。
 
