@@ -168,9 +168,10 @@ the transition. That mode preserves Grant transport compatibility only; it does
 not import `sa.key` into the KMS and does not replace worker identity,
 attestation, or KMS cutover.
 
-The static `bindings` map in the current command is for bootstrap and tests. A
-production cutover requires an attestation-backed resolver with immutable
-ServiceAccount UID, Pod UID, audience, issuer, and generation binding.
+The static `bindings` map in the current command is for bootstrap and tests.
+The production cutover uses the implemented signed remote-attestation resolver;
+the deployed attestor must return immutable ServiceAccount UID, Pod UID,
+audience, issuer, and generation bindings.
 
 ## 8. Remove the old private key from master nodes
 
@@ -217,7 +218,7 @@ The following must still be supplied before production migration:
 - target-KMS exact-key import, non-exportability, and recovery procedures;
 - consistency checks for the existing public JWK, `kid`, and algorithm;
 - the actual kube-apiserver/controller-manager cutover to the new token path;
-- production attestation resolver, mTLS identity, and an HA ledger;
+- production attestor service, mTLS identity, and an HA ledger;
 - master-node private-key reference scanning, removal, and audit tooling;
 - failure injection, token-TTL validation, and rollback exercises.
 

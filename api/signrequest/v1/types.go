@@ -69,6 +69,26 @@ type TokenRequest struct {
 	BoundObjectRef    *BoundObjectReference `json:"boundObjectRef,omitempty"`
 }
 
+// AttestationRequest asks a trusted node attestor to resolve the immutable
+// workload binding for one worker-side TokenRequest. The nonce and complete
+// request are included in the digest signed by the attestor.
+type AttestationRequest struct {
+	Identity  string       `json:"identity"`
+	Namespace string       `json:"namespace"`
+	Name      string       `json:"name"`
+	Request   TokenRequest `json:"request"`
+	Nonce     string       `json:"nonce"`
+}
+
+// AttestationResponse contains the attestor-signed immutable binding. The
+// proof is verified against the configured attestor key, never a key supplied
+// by the node-agent request.
+type AttestationResponse struct {
+	RequestDigest string        `json:"request_digest"`
+	Binding       TokenBinding  `json:"binding"`
+	Proof         IdentityProof `json:"proof"`
+}
+
 // BoundObjectReference mirrors the subset of the Kubernetes TokenRequest
 // reference needed by the SA agent. Keeping it in the wire package avoids a
 // dependency on the Kubernetes control-plane modules.

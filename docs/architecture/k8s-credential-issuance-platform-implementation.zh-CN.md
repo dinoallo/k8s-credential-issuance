@@ -319,6 +319,7 @@ etcd: 独立的 peer/client intermediate key
 - `api/grant/v1` 和 `api/signrequest/v1` 定义公共 Grant 及 SA direct request/response 类型；
 - `internal/issuance/core` 实现 canonical JSON、Compact JWS Grant、replay state、ledger reservation/结果恢复、受限 KMS intent、audit、generation、transport helper 和有序签发流水线；
 - `internal/issuance/domains/sa` 实现 SA plugin、signer 和 node-agent/provider 路径；
+- `internal/issuance/domains/sa/attestation.go` 实现带签名的远程 attestation resolver、request digest binding、replay protection 和 fail-closed endpoint 处理；
 - `internal/authority/domains/sa` 实现 registration、worker proof 校验、Grant 签发、撤销和 authority endpoint；
 - `internal/issuance/domains/ca` 实现有界 CSR 解析、profile policy、CA plugin/signer、证书 Agent、CSR status controller 和证书轮换路径；
 - `internal/authority/domains/ca` 实现 registration、worker proof 校验、Grant 签发、撤销和 CA policy endpoint；
@@ -368,7 +369,7 @@ Phase 0 已在契约/文档层面闭环。Phase 1 参考实现和可执行测试
 | 公共 core 模块和有序流水线 | `internal/issuance/core/**` 及 `go test ./...` | PASS |
 | SA authority、signer、node-agent、claims binding 和 direct flow | `internal/authority/domains/sa/**`、`internal/issuance/domains/sa/**`、`TestSignerRejectsClaimsThatDoNotMatchTheBinding` 及 `internal/issuance/domains/sa/e2e_test.go` | PASS |
 | 跨领域、fail-closed、并发、重启和精确重试 | `internal/issuance/core/*/*_test.go` 及 SA E2E test | PASS |
-| HA store、完整 mTLS identity provisioning、attestation resolver 和生产 KMS/audit 部署 | Phase 4 部署控制 | OPEN |
+| HA store、完整 mTLS identity provisioning、attestor 服务和生产 KMS/audit 部署 | Phase 4 部署控制 | OPEN |
 | 旧 staging `TokenGrant` wire compatibility | `internal/issuance/domains/sa/legacy.go`、legacy authority/signer/node-agent E2E 及协议测试 | PASS |
 
 ### Phase 2：接入 CA

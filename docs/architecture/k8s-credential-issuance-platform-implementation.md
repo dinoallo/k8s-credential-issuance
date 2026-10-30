@@ -327,6 +327,9 @@ and etcd contracts:
   pipeline;
 - `internal/issuance/domains/sa` implements the SA plugin, signer, and
   node-agent/provider path;
+- `internal/issuance/domains/sa/attestation.go` implements the signed remote
+  attestation resolver, request digest binding, replay protection, and
+  fail-closed endpoint handling;
 - `internal/authority/domains/sa` implements registration, worker proof
   verification, Grant issuance, revocation, and authority endpoints;
 - `internal/issuance/domains/ca` implements bounded CSR parsing, profile
@@ -352,9 +355,10 @@ Kubernetes workload UID.
 
 This is a reference implementation, not a production exit. The in-tree file
 stores are single-process stores rather than HA transactional backends, the
-node-agent configuration uses a static binding resolver, and the commands
-enforce server-side TLS for non-loopback listeners but do not yet provision a
-complete mutual-TLS identity system. The signer accepts the frozen
+node-agent now uses a signed remote-attestation resolver when configured (with
+the static resolver retained only behind an explicit development flag), and the
+commands enforce server-side TLS for non-loopback listeners but do not yet
+provision a complete mutual-TLS identity system. The signer accepts the frozen
 `issuance/v1` Compact JWS by default; the SA domain also contains an explicit,
 opt-in adapter for the legacy Kubernetes staging `TokenGrant` JSON envelope.
 The adapter converts the legacy envelope into the typed Grant consumed by the
@@ -402,7 +406,7 @@ is not approved by this record.
 | Common core modules and ordered pipeline | `internal/issuance/core/**` and `go test ./...` | PASS |
 | SA authority, signer, node-agent, strict claims binding, and direct flow | `internal/authority/domains/sa/**`, `internal/issuance/domains/sa/**`, `TestSignerRejectsClaimsThatDoNotMatchTheBinding`, and `internal/issuance/domains/sa/e2e_test.go` | PASS |
 | Cross-domain, fail-closed, concurrency, restart, and exact-retry behavior | `internal/issuance/core/*/*_test.go` and SA E2E test | PASS |
-| HA stores, complete mTLS identity provisioning, attestation resolver, and production KMS/audit deployment | Phase 4 deployment controls | OPEN |
+| HA stores, complete mTLS identity provisioning, attestation service, and production KMS/audit deployment | Phase 4 deployment controls | OPEN |
 | Legacy staging `TokenGrant` wire compatibility | `internal/issuance/domains/sa/legacy.go`, legacy authority/signer/node-agent E2E and protocol tests | PASS |
 
 ### Phase 2: Add CA

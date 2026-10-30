@@ -2,8 +2,9 @@
 
 This repository contains a reference SA path for the frozen `issuance/v1`
 contract. It is suitable for local integration and security-contract tests;
-the file-backed stores and static node-agent resolver are not an HA production
-deployment.
+the file-backed stores and the attestation service are not an HA production
+deployment. The node-agent's signed remote-attestation resolver is implemented,
+but its attestor and deployment controls remain environment-specific.
 
 ## Processes and trust boundaries
 
@@ -130,27 +131,24 @@ Node-agent (`sa-node-agent`):
   "signer_endpoint": "https://signer.example/v1/sign",
   "identity": "worker-1",
   "identity_key_file": "secrets/worker-1.pem",
-  "bindings": {
-    "default/reader": {
-      "cluster_id": "cluster-1",
-      "service_account_namespace": "default",
-      "service_account_name": "reader",
-      "service_account_uid": "sa-uid-1",
-      "pod_uid": "pod-uid-1",
-      "subject": "system:serviceaccount:default:reader",
-      "audience": ["api"],
-      "issuer": "https://issuer.example",
-      "not_before": 1760000000,
-      "not_after": 1760003600,
-      "token_generation": "generation-1"
-    }
-  }
+  "attestation_endpoint": "https://attestor.example/v1/attest",
+  "attestation_identity": "node-attestor-1",
+  "attestation_public_key": "REPLACE_BASE64URL_ED25519_PUBLIC_KEY"
 }
 ```
 
-The static `bindings` map is only a bootstrap/test resolver. A production
-agent must replace it with an attestation-backed resolver that supplies the
-immutable ServiceAccount UID, Pod UID, audience, issuer, and generation.
+Production configuration requires the attestation endpoint, its pinned
+Ed25519 identity, and the corresponding public key. The resolver sends the
+worker identity, namespace/name, complete Kubernetes TokenRequest, and a fresh
+nonce; it accepts only a response whose canonical request digest matches and
+whose binding proof verifies with the pinned attestor key. The response must
+provide immutable ServiceAccount UID, Pod UID, audience, issuer, and token
+generation values.
+
+The old `bindings` map is retained only for development and bootstrap tests.
+To use it, omit the attestation fields and pass
+`--allow-static-bindings` explicitly. Without that flag, the node-agent refuses
+to start rather than silently selecting a static resolver.
 
 Default listeners are loopback for the authority and signer and
 `unix:///var/run/sa-node-agent.sock` for the node-agent. A non-loopback TCP
@@ -180,9 +178,8 @@ Kubernetes-shaped `status.token` and `status.expirationTimestamp` fields.
 
 The legacy mode is explicit and must not be enabled accidentally: it exists to
 complete migration of the old carrier, while new deployments should use JWS.
-HA ledgers, complete mTLS identity provisioning, attestation-backed workload
-resolution, and production KMS/audit deployment remain separate production
-gates.
+HA ledgers, complete mTLS identity provisioning, the attestation service, and
+production KMS/audit deployment remain separate production gates.
 
 ## Verification
 

@@ -152,9 +152,9 @@ KMS import 必须确保该 endpoint 返回与现有 `sa.pub`、`kid` 和 algorit
 模式只兼容 Grant 的传输格式，不代表 `sa.key` 已经导入 KMS，也不能替代
 worker identity、attestation 或 KMS 切换。
 
-当前命令中的静态 `bindings` 只适合 bootstrap/test。生产切换前必须使用
-基于 attestation 的 resolver，并绑定不可变的 ServiceAccount UID、Pod UID、
-audience、issuer 和 generation。
+当前命令中的静态 `bindings` 只适合 bootstrap/test。生产切换使用已经实现的
+带签名远程 attestation resolver；部署的 attestor 必须返回不可变的
+ServiceAccount UID、Pod UID、audience、issuer 和 generation binding。
 
 ## 8. 从 master 移除旧私钥
 
@@ -196,7 +196,7 @@ audience、issuer 和 generation。
 - 目标 KMS 的 exact-key import、不可导出和恢复流程；
 - 原有 public JWK、`kid` 和 algorithm 的一致性校验；
 - kube-apiserver/controller-manager 到新 token 路径的实际切流；
-- 生产 attestation resolver、mTLS identity 和 HA ledger；
+- 生产 attestor 服务、mTLS identity 和 HA ledger；
 - master 私钥引用扫描、删除和审计工具；
 - 失败注入、token TTL 验证和回滚演练。
 

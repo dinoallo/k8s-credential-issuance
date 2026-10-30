@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
 	"time"
 
 	signapi "github.com/dinoallo/k8s-credential-issuance/api/signrequest/v1"
@@ -150,59 +149,11 @@ func (r StaticBindingResolver) Resolve(_ context.Context, namespace, name string
 	if !ok {
 		return signapi.TokenBinding{}, fmt.Errorf("no trusted binding for %s/%s", namespace, name)
 	}
-	audiences, expirationSeconds, ref, hasKubernetesRequest, err := requestDetails(request)
-	if err != nil {
-		return signapi.TokenBinding{}, err
-	}
-	if len(audiences) > 0 {
-		seen := make(map[string]struct{}, len(audiences))
-		for _, audience := range audiences {
-			if audience == "" {
-				return signapi.TokenBinding{}, fmt.Errorf("TokenRequest contains an empty audience")
-			}
-			if _, exists := seen[audience]; exists {
-				return signapi.TokenBinding{}, fmt.Errorf("TokenRequest contains a duplicate audience")
-			}
-			seen[audience] = struct{}{}
-		}
-		binding.Audience = append([]string(nil), audiences...)
-		sort.Strings(binding.Audience)
-	}
-	if hasKubernetesRequest {
-		if ref != nil {
-			if ref.Kind != "Pod" || binding.PodUID == "" || ref.UID == "" || ref.UID != binding.PodUID {
-				return signapi.TokenBinding{}, fmt.Errorf("TokenRequest Pod binding does not match the trusted Pod UID")
-			}
-		} else if binding.PodUID != "" {
-			return signapi.TokenBinding{}, fmt.Errorf("trusted Pod binding requires a Pod TokenRequest reference")
-		}
-	}
 	now := time.Now()
 	if r.Now != nil {
 		now = r.Now()
 	}
-	if binding.NotBefore == 0 {
-		binding.NotBefore = now.Unix()
-	}
-	if expirationSeconds != nil && *expirationSeconds <= 0 {
-		return signapi.TokenBinding{}, fmt.Errorf("TokenRequest expirationSeconds must be positive")
-	}
-	if binding.NotAfter == 0 {
-		seconds := int64(3600)
-		if expirationSeconds != nil {
-			seconds = *expirationSeconds
-		}
-		binding.NotAfter = binding.NotBefore + seconds
-	} else if expirationSeconds != nil {
-		requestedNotAfter := binding.NotBefore + *expirationSeconds
-		if requestedNotAfter <= binding.NotBefore {
-			return signapi.TokenBinding{}, fmt.Errorf("TokenRequest expirationSeconds overflows the validity window")
-		}
-		if requestedNotAfter < binding.NotAfter {
-			binding.NotAfter = requestedNotAfter
-		}
-	}
-	return binding, nil
+	return applyTokenRequestConstraints(binding, namespace, name, request, now)
 }
 
 func KubernetesBoundObjectRef(request signapi.TokenRequest) (*signapi.BoundObjectReference, bool, error) {

@@ -1,6 +1,6 @@
 # ServiceAccount 签发参考部署
 
-本仓库实现的是冻结的 `issuance/v1` 契约下的 SA 参考路径，可用于本地集成和安全契约测试。文件存储和静态 node-agent resolver 不是 HA 生产部署。
+本仓库实现的是冻结的 `issuance/v1` 契约下的 SA 参考路径，可用于本地集成和安全契约测试。文件存储和 attestor 服务不是 HA 生产部署；node-agent 的带签名远程 attestation resolver 已实现，但 attestor 及其部署控制仍由环境提供。
 
 ## 进程与信任边界
 
@@ -73,7 +73,9 @@ Signer 使用的 Infisical key 必须处于 enabled 状态、用途为 `sign-ver
 
 `--allow-local-key-provider` 和 `local_key_files` 仅用于开发测试，会让 signer 进程接触可导出的私钥，不能用于生产。
 
-Node-agent 至少需要 authority/signer endpoint、worker identity、identity key，以及按 `namespace/name` 配置的 binding。当前命令使用静态 `bindings` 只用于 bootstrap/test；生产 agent 必须替换为基于 attestation 的 resolver，并提供不可变的 ServiceAccount UID、Pod UID、audience、issuer 和 generation。
+生产 node-agent 必须配置 authority/signer endpoint、worker identity、identity key、`attestation_endpoint`、固定的 `attestation_identity` 和对应的 Ed25519 `attestation_public_key`。Resolver 会把 worker identity、namespace/name、完整 Kubernetes TokenRequest 和一次性 nonce 发给 attestor，只接受 request digest 匹配且能用固定 attestor 公钥验证的 binding proof；返回结果必须包含不可变的 ServiceAccount UID、Pod UID、audience、issuer 和 generation。
+
+旧的静态 `bindings` map 只保留给开发和 bootstrap 测试。只有显式传入 `--allow-static-bindings` 才能启用它；未配置 attestation 且未传该参数时，node-agent 会拒绝启动，不会静默选择静态 resolver。
 
 Authority 和 signer 默认监听 loopback，node-agent 默认监听 `unix:///var/run/sa-node-agent.sock`。非 loopback TCP listener 必须提供 `--tls-cert-file` 和 `--tls-key-file`；Unix socket 创建为 `0600`。这些参数只建立 server-side TLS；双向 TLS、服务身份、HA ledger、持久审计和 KMS 恢复仍是额外部署控制，本参考配置没有声称提供。
 
@@ -83,7 +85,7 @@ Authority 和 signer 默认监听 loopback，node-agent 默认监听 `unix:///va
 
 仍使用旧 API-server carrier 的迁移部署，需要把 authority 的 `grant_format` 设为 `legacy-token-grant`，把 signer 的 `allow_legacy_token_grant` 设为 `true`。此时 authority 返回旧的 canonical JSON `TokenGrant` object，signer 接受没有新的 `X-Issuance-Identity` header 的请求。SA adapter 校验旧的 `ed25519-v1:<key-id>:<signature>` envelope，保留旧 binding digest 语义，然后在进入公共 core pipeline 前转换为类型化 Grant。node-agent `/v1/token` 兼容 envelope 返回 Kubernetes 风格的 `status.token` 和 `status.expirationTimestamp` 字段。
 
-legacy 模式是显式开关，不能误开：它用于完成旧 carrier 迁移，新部署应使用 JWS。HA ledger、完整 mTLS identity provisioning、基于 attestation 的 workload resolver 以及生产 KMS/audit 部署仍是独立的生产门禁。
+legacy 模式是显式开关，不能误开：它用于完成旧 carrier 迁移，新部署应使用 JWS。HA ledger、完整 mTLS identity provisioning、attestor 服务以及生产 KMS/audit 部署仍是独立的生产门禁。
 
 ## 验证
 

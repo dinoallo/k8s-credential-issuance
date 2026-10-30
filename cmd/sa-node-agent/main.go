@@ -18,11 +18,14 @@ import (
 )
 
 type configFile struct {
-	AuthorityEndpoint string                          `json:"authority_endpoint"`
-	SignerEndpoint    string                          `json:"signer_endpoint"`
-	Identity          string                          `json:"identity"`
-	IdentityKeyFile   string                          `json:"identity_key_file"`
-	Bindings          map[string]signapi.TokenBinding `json:"bindings"`
+	AuthorityEndpoint    string                          `json:"authority_endpoint"`
+	SignerEndpoint       string                          `json:"signer_endpoint"`
+	Identity             string                          `json:"identity"`
+	IdentityKeyFile      string                          `json:"identity_key_file"`
+	Bindings             map[string]signapi.TokenBinding `json:"bindings"`
+	AttestationEndpoint  string                          `json:"attestation_endpoint,omitempty"`
+	AttestationIdentity  string                          `json:"attestation_identity,omitempty"`
+	AttestationPublicKey string                          `json:"attestation_public_key,omitempty"`
 }
 
 func main() {
@@ -30,16 +33,17 @@ func main() {
 	listenAddress := flag.String("listen-address", "unix:///var/run/sa-node-agent.sock", "HTTP, HTTPS, or Unix-socket listen address")
 	tlsCertFile := flag.String("tls-cert-file", "", "TLS serving certificate for a TCP listener")
 	tlsKeyFile := flag.String("tls-key-file", "", "TLS serving private key for a TCP listener")
+	allowStaticBindings := flag.Bool("allow-static-bindings", false, "allow the development-only static bindings resolver")
 	flag.Parse()
 	if *configPath == "" {
 		fatal(fmt.Errorf("--config is required"))
 	}
-	if err := run(*configPath, *listenAddress, *tlsCertFile, *tlsKeyFile); err != nil {
+	if err := run(*configPath, *listenAddress, *tlsCertFile, *tlsKeyFile, *allowStaticBindings); err != nil {
 		fatal(err)
 	}
 }
 
-func run(configPath, listenAddress, tlsCertFile, tlsKeyFile string) error {
+func run(configPath, listenAddress, tlsCertFile, tlsKeyFile string, allowStaticBindings bool) error {
 	config, baseDir, err := loadConfig(configPath)
 	if err != nil {
 		return err
@@ -52,7 +56,36 @@ func run(configPath, listenAddress, tlsCertFile, tlsKeyFile string) error {
 	if err != nil {
 		return err
 	}
-	resolver := sadomain.StaticBindingResolver{Bindings: config.Bindings}
+	var resolver sadomain.BindingResolver
+	switch {
+	case config.AttestationEndpoint != "":
+		if allowStaticBindings {
+			return fmt.Errorf("--allow-static-bindings cannot be combined with attestation_endpoint")
+		}
+		if config.AttestationIdentity == "" || config.AttestationPublicKey == "" {
+			return fmt.Errorf("attestation_identity and attestation_public_key are required with attestation_endpoint")
+		}
+		attestorKey, err := identity.DecodePublicKey(config.AttestationPublicKey)
+		if err != nil {
+			return fmt.Errorf("decode attestation public key: %w", err)
+		}
+		resolver, err = sadomain.NewRemoteAttestationResolver(sadomain.RemoteAttestationConfig{
+			Endpoint:          config.AttestationEndpoint,
+			Identity:          config.Identity,
+			AttestorIdentity:  config.AttestationIdentity,
+			AttestorPublicKey: attestorKey,
+		})
+		if err != nil {
+			return err
+		}
+	case allowStaticBindings:
+		if len(config.Bindings) == 0 {
+			return fmt.Errorf("static bindings are empty")
+		}
+		resolver = sadomain.StaticBindingResolver{Bindings: config.Bindings}
+	default:
+		return fmt.Errorf("attestation_endpoint is required; use --allow-static-bindings only for development")
+	}
 	provider, err := sadomain.NewProvider(sadomain.AgentConfig{AuthorityEndpoint: config.AuthorityEndpoint, SignerEndpoint: config.SignerEndpoint, Identity: config.Identity, IdentityKey: identityKey, Resolver: resolver})
 	if err != nil {
 		return err
