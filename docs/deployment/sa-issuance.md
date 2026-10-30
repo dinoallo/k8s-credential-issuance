@@ -197,4 +197,5 @@ and node-agent request flow.
 
 ## Related documents
 
+- [Helm chart deployment](./helm.md)
 - [ServiceAccount `sa.key` migration plan](../migration/sa-key-migration.md)

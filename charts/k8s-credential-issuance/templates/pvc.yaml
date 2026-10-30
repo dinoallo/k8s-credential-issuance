@@ -1,0 +1,45 @@
+{{- if and .Values.authority.enabled .Values.authority.state.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "authority") }}-state
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "authority") | nindent 4 }}
+  {{- with .Values.authority.state.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.authority.state.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.authority.state.persistence.size }}
+  {{- with .Values.authority.state.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}
+{{- if and .Values.authority.enabled .Values.signer.enabled .Values.signer.state.persistence.enabled }}
+---
+{{- end }}
+{{- if and .Values.signer.enabled .Values.signer.state.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "signer") }}-state
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "signer") | nindent 4 }}
+  {{- with .Values.signer.state.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.signer.state.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.signer.state.persistence.size }}
+  {{- with .Values.signer.state.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,146 @@
+{{- if .Values.signer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "signer") }}
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "signer") | nindent 4 }}
+spec:
+  replicas: {{ .Values.signer.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kci.selectorLabels" (dict "root" . "component" "signer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kci.componentLabels" (dict "root" . "component" "signer") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "kci.signerConfig" . | sha256sum }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.signer.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "kci.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.signer.terminationGracePeriodSeconds }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.signer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.signer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.signer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.signer.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: sa-signer
+          image: {{ include "kci.image" (dict "root" . "component" "signer" "image" .Values.signer.image) }}
+          imagePullPolicy: {{ default .Values.global.imagePullPolicy .Values.signer.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.global.containerSecurityContext | nindent 12 }}
+          args:
+            - {{ printf "--config=/etc/k8s-credential-issuance/config/config.json" | quote }}
+            - {{ printf "--listen-address=%s" .Values.signer.listenAddress | quote }}
+            {{- if .Values.signer.tls.enabled }}
+            - {{ printf "--tls-cert-file=%s" .Values.signer.tls.certFile | quote }}
+            - {{ printf "--tls-key-file=%s" .Values.signer.tls.keyFile | quote }}
+            {{- end }}
+            {{- if .Values.signer.allowLocalKeyProvider }}
+            - --allow-local-key-provider
+            {{- end }}
+          {{- with .Values.signer.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.signer.service.targetPort }}
+              protocol: TCP
+          {{- if .Values.signer.probes.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.signer.probes.liveness.path }}
+              port: http
+              scheme: {{ ternary "HTTPS" "HTTP" .Values.signer.tls.enabled }}
+            initialDelaySeconds: {{ .Values.signer.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.signer.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.signer.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.signer.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.signer.probes.readiness.path }}
+              port: http
+              scheme: {{ ternary "HTTPS" "HTTP" .Values.signer.tls.enabled }}
+            initialDelaySeconds: {{ .Values.signer.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.signer.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.signer.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.signer.probes.readiness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.signer.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/k8s-credential-issuance/config
+              readOnly: true
+            - name: state
+              mountPath: {{ .Values.signer.state.mountPath }}
+            {{- if and (eq (lower .Values.signer.kms.provider) "infisical") .Values.signer.kms.authToken.enabled }}
+            - name: kms-token
+              mountPath: {{ .Values.signer.kms.authToken.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.signer.tls.enabled }}
+            - name: tls
+              mountPath: /etc/k8s-credential-issuance/tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.signer.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kci.componentName" (dict "root" . "component" "signer") }}-config
+            defaultMode: 292
+        - name: state
+          {{- if .Values.signer.state.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "kci.componentName" (dict "root" . "component" "signer") }}-state
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if and (eq (lower .Values.signer.kms.provider) "infisical") .Values.signer.kms.authToken.enabled }}
+        - name: kms-token
+          secret:
+            secretName: {{ include "kci.signerKMSSecretName" . }}
+            defaultMode: 288
+            items:
+              - key: {{ .Values.signer.kms.authToken.key | quote }}
+                path: {{ .Values.signer.kms.authToken.key | quote }}
+        {{- end }}
+        {{- if .Values.signer.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "kci.signerTLSSecretName" . }}
+            defaultMode: 288
+        {{- end }}
+        {{- with .Values.signer.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

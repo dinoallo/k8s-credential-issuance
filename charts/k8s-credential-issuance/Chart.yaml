@@ -1,0 +1,7 @@
+apiVersion: v2
+name: k8s-credential-issuance
+description: Helm chart for the ServiceAccount credential issuance reference components
+type: application
+version: 0.1.0
+appVersion: "latest"
+kubeVersion: ">=1.25.0-0"

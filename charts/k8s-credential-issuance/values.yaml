@@ -1,0 +1,252 @@
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  # The GitHub Actions workflow publishes these repositories to GHCR.
+  imageRegistry: ghcr.io/dinoallo/k8s-credential-issuance
+  imagePullSecrets: []
+  imagePullPolicy: IfNotPresent
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+authority:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ""
+    tag: latest
+    pullPolicy: ""
+  listenAddress: ":9441"
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 9441
+    targetPort: 9441
+    annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+    create: false
+    cert: ""
+    key: ""
+    certFile: /etc/k8s-credential-issuance/tls/tls.crt
+    keyFile: /etc/k8s-credential-issuance/tls/tls.key
+  config:
+    cluster_id: cluster-1
+    issuer: https://issuer.example
+    policy_version: sa-policy-v1
+    grant_format: compact-jws
+    signing_key_id: eaa-2026-01
+    max_token_lifetime_seconds: 3600
+    registrations: []
+  signingKey:
+    # Set secretName to a pre-created Secret, or set create=true and value via
+    # --set-file. The key must contain an Ed25519 private key in PEM format.
+    secretName: ""
+    create: false
+    key: eaa-private-key.pem
+    value: ""
+    mountPath: /etc/k8s-credential-issuance/authority-secrets
+  state:
+    mountPath: /var/lib/k8s-credential-issuance/authority
+    persistence:
+      enabled: true
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+      storageClass: ""
+      annotations: {}
+  probes:
+    enabled: true
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  terminationGracePeriodSeconds: 30
+
+signer:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ""
+    tag: latest
+    pullPolicy: ""
+  listenAddress: ":9444"
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 9444
+    targetPort: 9444
+    annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+    create: false
+    cert: ""
+    key: ""
+    certFile: /etc/k8s-credential-issuance/tls/tls.crt
+    keyFile: /etc/k8s-credential-issuance/tls/tls.key
+  allowLocalKeyProvider: false
+  config:
+    cluster_id: cluster-1
+    issuer: https://issuer.example
+    policy_version: sa-policy-v1
+    allow_legacy_token_grant: false
+    eaa_keys: {}
+    revocation_endpoint: ""
+    max_token_lifetime_seconds: 3600
+    key_generations: []
+    local_key_files: {}
+  kms:
+    provider: infisical
+    endpoint: https://infisical.example
+    authToken:
+      enabled: true
+      secretName: ""
+      create: false
+      key: token
+      value: ""
+      mountPath: /etc/k8s-credential-issuance/kms-secrets
+  state:
+    mountPath: /var/lib/k8s-credential-issuance/signer
+    persistence:
+      enabled: true
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+      storageClass: ""
+      annotations: {}
+  probes:
+    enabled: true
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  terminationGracePeriodSeconds: 30
+
+nodeAgent:
+  enabled: true
+  image:
+    repository: ""
+    tag: latest
+    pullPolicy: ""
+  # The default Unix socket is exposed through a hostPath so a node-local
+  # Kubernetes component can use it. Set socket.hostPath to "" to use an
+  # emptyDir for an in-pod or test-only deployment.
+  listenAddress: unix:///var/run/k8s-credential-issuance/sa-node-agent.sock
+  service:
+    enabled: false
+    type: ClusterIP
+    port: 9445
+    targetPort: 9445
+    annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+    create: false
+    cert: ""
+    key: ""
+    certFile: /etc/k8s-credential-issuance/tls/tls.crt
+    keyFile: /etc/k8s-credential-issuance/tls/tls.key
+  allowStaticBindings: false
+  config:
+    authority_endpoint: ""
+    signer_endpoint: ""
+    identity: worker-1
+    attestation_endpoint: https://attestor.example/v1/attest
+    attestation_identity: node-attestor-1
+    attestation_public_key: REPLACE_BASE64URL_ED25519_PUBLIC_KEY
+    bindings: {}
+  identityKey:
+    secretName: ""
+    create: false
+    key: worker-1.pem
+    value: ""
+    mountPath: /etc/k8s-credential-issuance/node-agent-secrets
+  socket:
+    hostPath: /var/run/k8s-credential-issuance
+    mountPath: /var/run/k8s-credential-issuance
+    initContainer:
+      enabled: true
+      image: busybox:1.36
+      imagePullPolicy: IfNotPresent
+  probes:
+    enabled: false
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  terminationGracePeriodSeconds: 30

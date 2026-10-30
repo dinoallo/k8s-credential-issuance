@@ -99,4 +99,5 @@ GOCACHE=/tmp/k8s-credential-issuance-buildcache go build -buildvcs=false ./cmd/s
 
 ## 相关文档
 
+- [Helm Chart 部署](./helm.zh-CN.md)
 - [ServiceAccount `sa.key` 迁移方案](../migration/sa-key-migration.zh-CN.md)

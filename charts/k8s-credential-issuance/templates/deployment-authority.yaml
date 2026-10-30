@@ -1,0 +1,139 @@
+{{- if .Values.authority.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "authority") }}
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "authority") | nindent 4 }}
+spec:
+  replicas: {{ .Values.authority.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kci.selectorLabels" (dict "root" . "component" "authority") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kci.componentLabels" (dict "root" . "component" "authority") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "kci.authorityConfig" . | sha256sum }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.authority.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "kci.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.authority.terminationGracePeriodSeconds }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.authority.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.authority.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.authority.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.authority.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: sa-authority
+          image: {{ include "kci.image" (dict "root" . "component" "authority" "image" .Values.authority.image) }}
+          imagePullPolicy: {{ default .Values.global.imagePullPolicy .Values.authority.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.global.containerSecurityContext | nindent 12 }}
+          args:
+            - {{ printf "--config=/etc/k8s-credential-issuance/config/config.json" | quote }}
+            - {{ printf "--listen-address=%s" .Values.authority.listenAddress | quote }}
+            {{- if .Values.authority.tls.enabled }}
+            - {{ printf "--tls-cert-file=%s" .Values.authority.tls.certFile | quote }}
+            - {{ printf "--tls-key-file=%s" .Values.authority.tls.keyFile | quote }}
+            {{- end }}
+          {{- with .Values.authority.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.authority.service.targetPort }}
+              protocol: TCP
+          {{- if .Values.authority.probes.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.authority.probes.liveness.path }}
+              port: http
+              scheme: {{ ternary "HTTPS" "HTTP" .Values.authority.tls.enabled }}
+            initialDelaySeconds: {{ .Values.authority.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.authority.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.authority.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.authority.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.authority.probes.readiness.path }}
+              port: http
+              scheme: {{ ternary "HTTPS" "HTTP" .Values.authority.tls.enabled }}
+            initialDelaySeconds: {{ .Values.authority.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.authority.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.authority.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.authority.probes.readiness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.authority.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/k8s-credential-issuance/config
+              readOnly: true
+            - name: signing-key
+              mountPath: {{ .Values.authority.signingKey.mountPath }}
+              readOnly: true
+            - name: state
+              mountPath: {{ .Values.authority.state.mountPath }}
+            {{- if .Values.authority.tls.enabled }}
+            - name: tls
+              mountPath: /etc/k8s-credential-issuance/tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.authority.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kci.componentName" (dict "root" . "component" "authority") }}-config
+            defaultMode: 292
+        - name: signing-key
+          secret:
+            secretName: {{ include "kci.authoritySigningKeySecretName" . }}
+            defaultMode: 288
+            items:
+              - key: {{ .Values.authority.signingKey.key | quote }}
+                path: {{ .Values.authority.signingKey.key | quote }}
+        - name: state
+          {{- if .Values.authority.state.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "kci.componentName" (dict "root" . "component" "authority") }}-state
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.authority.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "kci.authorityTLSSecretName" . }}
+            defaultMode: 288
+        {{- end }}
+        {{- with .Values.authority.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

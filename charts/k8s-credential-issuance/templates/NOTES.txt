@@ -1,0 +1,13 @@
+The k8s-credential-issuance reference components have been rendered.
+
+Check workload status:
+  kubectl -n {{ .Release.Namespace }} get deploy,ds,svc,pvc
+
+Authority and signer are available inside the namespace at:
+  {{ include "kci.authorityEndpoint" . }}
+  {{ include "kci.signerEndpoint" . }}
+
+The default values reference externally managed key Secrets and use HTTP for
+the in-cluster services. Review the chart README before using this release in
+production, especially the TLS, KMS, attestation, hostPath, and file-backed
+ledger requirements.

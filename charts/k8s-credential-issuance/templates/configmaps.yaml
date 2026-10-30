@@ -1,0 +1,39 @@
+{{- if .Values.authority.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "authority") }}-config
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "authority") | nindent 4 }}
+data:
+  config.json: |
+    {{- include "kci.authorityConfig" . | nindent 4 }}
+{{- end }}
+{{- if and .Values.authority.enabled .Values.signer.enabled }}
+---
+{{- end }}
+{{- if .Values.signer.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "signer") }}-config
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "signer") | nindent 4 }}
+data:
+  config.json: |
+    {{- include "kci.signerConfig" . | nindent 4 }}
+{{- end }}
+{{- if or (and .Values.authority.enabled .Values.nodeAgent.enabled) (and .Values.signer.enabled .Values.nodeAgent.enabled) }}
+---
+{{- end }}
+{{- if .Values.nodeAgent.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kci.componentName" (dict "root" . "component" "node-agent") }}-config
+  labels:
+    {{- include "kci.componentLabels" (dict "root" . "component" "node-agent") | nindent 4 }}
+data:
+  config.json: |
+    {{- include "kci.nodeAgentConfig" . | nindent 4 }}
+{{- end }}
