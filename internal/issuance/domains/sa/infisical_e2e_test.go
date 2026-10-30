@@ -3,6 +3,7 @@
 package sa_test
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ed25519"
@@ -15,7 +16,9 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +41,7 @@ func TestInfisicalSAEndToEnd(t *testing.T) {
 	endpoint := requiredLiveEnv(t, "INFISICAL_KMS_ENDPOINT")
 	tokenFile := requiredLiveEnv(t, "INFISICAL_KMS_TOKEN_FILE")
 	keyRef := requiredLiveEnv(t, "INFISICAL_KMS_KEY_REF")
+	expectedAlgorithm := liveEnvDefault("INFISICAL_KMS_ALGORITHM", "RSA_2048")
 	tokenData, err := os.ReadFile(tokenFile)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +55,7 @@ func TestInfisicalSAEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Infisical key metadata: %v", err)
 	}
-	if key.KeyUsage != infisicalapi.KeyUsageSignVerify || key.IsDisabled || key.IsExportable {
+	if key.KeyUsage != infisicalapi.KeyUsageSignVerify || key.Algorithm != expectedAlgorithm || key.IsDisabled || key.IsExportable || !key.HasDeleteProtection {
 		t.Fatalf("Infisical key is not suitable for the test: %#v", key)
 	}
 	publicKeyMaterial, err := client.GetPublicKey(context.Background(), keyRef)
@@ -62,18 +66,28 @@ func TestInfisicalSAEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if publicKey.N.BitLen() < 2048 {
-		t.Fatalf("Infisical RSA key is too small: %d bits", publicKey.N.BitLen())
+	if strings.HasPrefix(expectedAlgorithm, "RSA_") {
+		expectedBits, err := strconv.Atoi(strings.TrimPrefix(expectedAlgorithm, "RSA_"))
+		if err != nil || publicKey.N.BitLen() != expectedBits {
+			t.Fatalf("Infisical RSA key does not match %s: %d bits", expectedAlgorithm, publicKey.N.BitLen())
+		}
 	}
 
-	const (
-		clusterID      = "cluster-infisical-e2e"
-		issuer         = "https://issuer.infisical-e2e.example"
-		policy         = "sa-policy-infisical-e2e"
-		generationName = "generation-infisical-e2e"
-		keyID          = "jwt-infisical-e2e"
-		worker         = "worker-infisical-e2e"
-	)
+	clusterID := liveEnvDefault("INFISICAL_SA_CLUSTER_ID", "cluster-infisical-e2e")
+	issuer := liveEnvDefault("INFISICAL_SA_ISSUER", "https://issuer.infisical-e2e.example")
+	policy := liveEnvDefault("INFISICAL_SA_POLICY", "sa-policy-infisical-e2e")
+	generationName := liveEnvDefault("INFISICAL_SA_GENERATION", "generation-infisical-e2e")
+	keyID := liveEnvDefault("INFISICAL_SA_KEY_ID", "jwt-infisical-e2e")
+	worker := liveEnvDefault("INFISICAL_SA_WORKER", "worker-infisical-e2e")
+	serviceAccountNamespace := liveEnvDefault("INFISICAL_SA_NAMESPACE", "default")
+	serviceAccountName := liveEnvDefault("INFISICAL_SA_NAME", "infisical-e2e")
+	serviceAccountUID := liveEnvDefault("INFISICAL_SA_UID", "sa-uid-infisical-e2e")
+	podUID := liveEnvDefault("INFISICAL_SA_POD_UID", "pod-uid-infisical-e2e")
+	audience := liveEnvDefault("INFISICAL_SA_AUDIENCE", "api")
+	registrationID := liveEnvDefault("INFISICAL_SA_REGISTRATION", "registration-infisical-e2e")
+	requestHost := liveEnvDefault("INFISICAL_SA_REQUEST_HOST", "authority.infisical-e2e")
+	signerHost := liveEnvDefault("INFISICAL_SA_SIGNER_HOST", "signer.infisical-e2e")
+	workerSubject := liveEnvDefault("INFISICAL_SA_WORKER_SUBJECT", worker)
 	now := time.Now().UTC().Truncate(time.Second)
 	eaaPublic, eaaPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -85,12 +99,12 @@ func TestInfisicalSAEndToEnd(t *testing.T) {
 	}
 	binding := signapi.TokenBinding{
 		ClusterID:               clusterID,
-		ServiceAccountNamespace: "default",
-		ServiceAccountName:      "infisical-e2e",
-		ServiceAccountUID:       "sa-uid-infisical-e2e",
-		PodUID:                  "pod-uid-infisical-e2e",
-		Subject:                 "system:serviceaccount:default:infisical-e2e",
-		Audience:                []string{"api"},
+		ServiceAccountNamespace: serviceAccountNamespace,
+		ServiceAccountName:      serviceAccountName,
+		ServiceAccountUID:       serviceAccountUID,
+		PodUID:                  podUID,
+		Subject:                 "system:serviceaccount:" + serviceAccountNamespace + ":" + serviceAccountName,
+		Audience:                []string{audience},
 		Issuer:                  issuer,
 		NotBefore:               now.Unix(),
 		NotAfter:                now.Add(time.Hour).Unix(),
@@ -98,8 +112,8 @@ func TestInfisicalSAEndToEnd(t *testing.T) {
 	}
 	registrations := sa.NewMemoryRegistrationStore()
 	if err := registrations.Register(context.Background(), sa.WorkloadRegistration{
-		RegistrationID:          "registration-infisical-e2e",
-		Identity:                worker,
+		RegistrationID:          registrationID,
+		Identity:                workerSubject,
 		IdentityPublicKey:       identity.EncodePublicKey(workerPublic),
 		ClusterID:               clusterID,
 		ServiceAccountNamespace: binding.ServiceAccountNamespace,
@@ -188,11 +202,33 @@ func TestInfisicalSAEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	jwksResponse := httptest.NewRecorder()
+	signer.Handler().ServeHTTP(jwksResponse, httptest.NewRequest(http.MethodGet, "/jwks.json", nil))
+	if jwksResponse.Code != http.StatusOK {
+		t.Fatalf("JWKS endpoint returned HTTP %d", jwksResponse.Code)
+	}
+	var jwks struct {
+		Keys []map[string]any `json:"keys"`
+	}
+	if err := json.Unmarshal(jwksResponse.Body.Bytes(), &jwks); err != nil {
+		t.Fatalf("decode signer JWKS: %v", err)
+	}
+	if len(jwks.Keys) != 1 || jwks.Keys[0]["kid"] != keyID || jwks.Keys[0]["alg"] != "RS256" || jwks.Keys[0]["kty"] != "RSA" {
+		t.Fatalf("signer JWKS does not preserve the migrated key metadata: %#v", jwks.Keys)
+	}
+	jwkN, ok := jwks.Keys[0]["n"].(string)
+	if !ok {
+		t.Fatal("signer JWKS is missing RSA modulus")
+	}
+	decodedJWKModulus, err := base64.RawURLEncoding.DecodeString(jwkN)
+	if err != nil || !bytes.Equal(decodedJWKModulus, publicKey.N.Bytes()) {
+		t.Fatal("signer JWKS RSA modulus does not match the imported public key")
+	}
 	httpClient := &http.Client{Transport: handlerTransport{authority: authority.Handler(), signer: signer.Handler()}}
 	nodeAgent, err := sadomain.NewProvider(sadomain.AgentConfig{
-		AuthorityEndpoint: "http://authority.infisical-e2e/v1/grants",
-		SignerEndpoint:    "http://signer.infisical-e2e/v1/sign",
-		Identity:          worker,
+		AuthorityEndpoint: "http://" + requestHost + "/v1/grants",
+		SignerEndpoint:    "http://" + signerHost + "/v1/sign",
+		Identity:          workerSubject,
 		IdentityKey:       workerPrivate,
 		HTTPClient:        httpClient,
 		Resolver: sadomain.BindingResolverFunc(func(context.Context, string, string, signapi.TokenRequest) (signapi.TokenBinding, error) {
@@ -212,6 +248,13 @@ func TestInfisicalSAEndToEnd(t *testing.T) {
 	if err := verifyLiveJWT(response.Token, publicKey, keyID, binding); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func liveEnvDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func requiredLiveEnv(t *testing.T, name string) string {
@@ -270,6 +313,33 @@ func verifyLiveJWT(token string, publicKey *rsa.PublicKey, keyID string, binding
 	}
 	if claims["iss"] != binding.Issuer || claims["sub"] != binding.Subject {
 		return fmt.Errorf("live JWT identity claims do not match binding")
+	}
+	audience, ok := claims["aud"].([]any)
+	if !ok || len(audience) != len(binding.Audience) {
+		return fmt.Errorf("live JWT audience does not match binding")
+	}
+	for i, value := range audience {
+		if value != binding.Audience[i] {
+			return fmt.Errorf("live JWT audience does not match binding")
+		}
+	}
+	for claim, expected := range map[string]int64{"iat": binding.NotBefore, "nbf": binding.NotBefore, "exp": binding.NotAfter} {
+		value, ok := claims[claim].(float64)
+		if !ok || int64(value) != expected {
+			return fmt.Errorf("live JWT %s claim does not match binding", claim)
+		}
+	}
+	private, ok := claims["kubernetes.io"].(map[string]any)
+	if !ok || private["namespace"] != binding.ServiceAccountNamespace {
+		return fmt.Errorf("live JWT Kubernetes namespace claim does not match binding")
+	}
+	serviceAccount, ok := private["serviceaccount"].(map[string]any)
+	if !ok || serviceAccount["name"] != binding.ServiceAccountName || serviceAccount["uid"] != binding.ServiceAccountUID {
+		return fmt.Errorf("live JWT ServiceAccount claim does not match binding")
+	}
+	pod, ok := private["pod"].(map[string]any)
+	if !ok || pod["uid"] != binding.PodUID {
+		return fmt.Errorf("live JWT Pod claim does not match binding")
 	}
 	encodedSignature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {

@@ -1,6 +1,7 @@
 # ServiceAccount `sa.key` Migration Plan
 
-**Status:** Archived design; production hardening is still required
+**Status:** Test-cluster exact-key rehearsal completed; production cutover and
+private-key removal are still pending
 
 **Date:** 2026-10-29
 
@@ -213,17 +214,20 @@ The repository already provides:
   recovery;
 - the direct token request path through the node-agent/provider.
 
-The following must still be supplied before production migration:
+The repository and the Kubernetes `release-1.28` integration branch now provide
+the test path for:
 
 - target-KMS exact-key import, non-exportability, and recovery procedures;
 - consistency checks for the existing public JWK, `kid`, and algorithm;
-- the actual kube-apiserver/controller-manager cutover to the new token path;
+- the kube-apiserver/controller-manager external TokenRequest cutover;
+- fail-closed behavior when the signer or KMS is unavailable;
 - production attestor service, mTLS identity, and an HA ledger;
-- master-node private-key reference scanning, removal, and audit tooling;
-- failure injection, token-TTL validation, and rollback exercises.
+- kubelet/node-agent Grant transport for existing projected-token consumers;
+- production master-node private-key removal and audit tooling.
 
-The repository is therefore a testable SA reference path, not a completed
-production migration utility.
+The completed test-cluster rehearsal validates the temporary cutover and
+rollback. It does not make the file-backed reference deployment a production
+HA deployment.
 
 ## 11. Acceptance criteria
 
@@ -244,6 +248,7 @@ The migration is ready for acceptance when:
    artifact;
 9. after import verification, no master node or startup argument references the
    old private-key file.
+
 
 ## Related documents
 

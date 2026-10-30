@@ -1,6 +1,6 @@
 # ServiceAccount `sa.key` 迁移方案
 
-**状态：** 方案归档，生产实施前仍需完成部署加固
+**状态：** 已完成测试集群 exact-key 导入、临时 TokenRequest 切流、故障注入和回滚；生产切换及删除 master 私钥仍待执行
 
 **日期：** 2026-10-29
 
@@ -215,6 +215,7 @@ ServiceAccount UID、Pod UID、audience、issuer 和 generation binding。
 7. master 节点不再有旧 `sa.key`，且启动参数和 manifest 没有残留引用；
 8. 重试返回相同的已记录 token 结果，不能重复签出不同 artifact；
 9. KMS import 完成验证后，master 节点和启动参数中不再存在旧私钥引用。
+
 
 ## 相关文档
 
