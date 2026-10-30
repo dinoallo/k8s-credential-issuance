@@ -1,0 +1,50 @@
+{{- if .Values.ingress.enabled }}
+{{- if not .Values.authority.enabled }}
+{{- fail "ingress.enabled requires authority.enabled=true" }}
+{{- end }}
+{{- if not .Values.signer.enabled }}
+{{- fail "ingress.enabled requires signer.enabled=true" }}
+{{- end }}
+{{- if not .Values.authority.service.enabled }}
+{{- fail "ingress.enabled requires authority.service.enabled=true" }}
+{{- end }}
+{{- if not .Values.signer.service.enabled }}
+{{- fail "ingress.enabled requires signer.service.enabled=true" }}
+{{- end }}
+{{- if eq (len .Values.ingress.hosts) 0 }}
+{{- fail "ingress.enabled requires at least one ingress.hosts entry" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "kci.fullname" . }}-ingress
+  labels:
+    {{- include "kci.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range $host := .Values.ingress.hosts }}
+    - host: {{ $host.host | quote }}
+      http:
+        paths:
+          {{- range $host.paths }}
+          - path: {{ .path | quote }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "kci.ingressServiceName" (dict "root" $ "service" $host.service) }}
+                port:
+                  number: {{ include "kci.ingressServicePort" (dict "root" $ "service" $host.service) }}
+          {{- end }}
+    {{- end }}
+{{- end }}

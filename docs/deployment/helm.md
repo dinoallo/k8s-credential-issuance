@@ -30,6 +30,11 @@ releases:
      enabled: true
    signer:
      enabled: true
+   ingress:
+     enabled: true
+     className: nginx
+     annotations:
+       nginx.ingress.kubernetes.io/backend-protocol: HTTPS
    nodeAgent:
      enabled: false
    ```
@@ -70,3 +75,9 @@ authority/signer Secrets in the issuance cluster and the node identity Secret
 in each workload cluster. The current chart also uses one configured
 node-agent identity and key for the whole DaemonSet; per-node identities need
 additional provisioning or separate releases.
+
+With `ingress.enabled: true`, the chart creates a standard
+`networking.k8s.io/v1` Ingress for the authority and signer hosts. An Ingress
+controller and the TLS Secret must be supplied by the cluster platform; the
+chart does not install either one. Set the controller-specific backend
+protocol annotation when the authority and signer Services use HTTPS.

@@ -125,6 +125,28 @@ signer:
     authToken:
       secretName: sa-signer-kms
 
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+  hosts:
+    - host: sa-authority.issuance.example
+      service: authority
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: sa-signer.issuance.example
+      service: signer
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: issuance-ingress-tls
+      hosts:
+        - sa-authority.issuance.example
+        - sa-signer.issuance.example
+
 nodeAgent:
   enabled: false
 ```
@@ -136,6 +158,9 @@ helm upgrade --install kci-issuance ./charts/k8s-credential-issuance \
   --namespace issuance --create-namespace \
   --values ./values-issuance.yaml
 ```
+
+当 `ingress.enabled` 为 `true` 时，Chart 会创建标准的
+`networking.k8s.io/v1` Ingress，将 authority 和 signer 的 host 路由到对应 Service。集群中必须已经存在 Ingress controller，并提供 values 中引用的 TLS Secret；Chart 不会安装 Ingress controller 或 IngressClass。只有当后端 Service 使用 HTTPS 时才需要 NGINX 的 `backend-protocol` annotation；使用其他 Ingress controller 时请替换为对应 annotation。
 
 业务集群的 values 关闭两个服务 Deployment，并覆盖自动生成的集群内 endpoint：
 

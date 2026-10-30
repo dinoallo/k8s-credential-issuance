@@ -121,6 +121,27 @@ app.kubernetes.io/component: {{ .component }}
 {{- default (printf "%s-node-agent-tls" (include "kci.fullname" .)) .Values.nodeAgent.tls.secretName }}
 {{- end }}
 
+{{/* Map an ingress host's logical backend to a chart Service. */}}
+{{- define "kci.ingressServiceName" -}}
+{{- if eq .service "authority" }}
+{{- include "kci.componentName" (dict "root" .root "component" "authority") }}
+{{- else if eq .service "signer" }}
+{{- include "kci.componentName" (dict "root" .root "component" "signer") }}
+{{- else }}
+{{- fail (printf "unsupported ingress service %q; use authority or signer" .service) }}
+{{- end }}
+{{- end }}
+
+{{- define "kci.ingressServicePort" -}}
+{{- if eq .service "authority" }}
+{{- .root.Values.authority.service.port }}
+{{- else if eq .service "signer" }}
+{{- .root.Values.signer.service.port }}
+{{- else }}
+{{- fail (printf "unsupported ingress service %q; use authority or signer" .service) }}
+{{- end }}
+{{- end }}
+
 {{/* JSON configuration emitted into the component ConfigMaps. */}}
 {{- define "kci.authorityConfig" -}}
 {{- $root := . -}}

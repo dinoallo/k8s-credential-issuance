@@ -28,6 +28,25 @@ serviceAccount:
   name: ""
   annotations: {}
 
+ingress:
+  # Creates one networking.k8s.io/v1 Ingress for the external issuance
+  # services. The default hosts are examples; replace them for a real cluster.
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: authority.issuance.example
+      service: authority
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: signer.issuance.example
+      service: signer
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
 authority:
   enabled: true
   replicaCount: 1

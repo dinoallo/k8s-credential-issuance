@@ -138,6 +138,28 @@ signer:
     authToken:
       secretName: sa-signer-kms
 
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+  hosts:
+    - host: sa-authority.issuance.example
+      service: authority
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: sa-signer.issuance.example
+      service: signer
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: issuance-ingress-tls
+      hosts:
+        - sa-authority.issuance.example
+        - sa-signer.issuance.example
+
 nodeAgent:
   enabled: false
 ```
@@ -150,6 +172,14 @@ helm upgrade --install kci-issuance ./charts/k8s-credential-issuance \
   --namespace issuance --create-namespace \
   --values ./values-issuance.yaml
 ```
+
+When `ingress.enabled` is true, the chart creates a standard
+`networking.k8s.io/v1` Ingress that routes the authority and signer hosts to
+their Services. An Ingress controller and the referenced TLS Secret must
+already exist or be provided by the platform; the chart does not install an
+Ingress controller or an IngressClass. The NGINX backend-protocol annotation
+is required only when the backend Services use HTTPS; use the equivalent
+annotation for another Ingress controller.
 
 The workload-cluster values disable both server Deployments and override the
 automatically generated in-cluster endpoints:
