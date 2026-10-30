@@ -42,3 +42,61 @@ func TestAuthorityRefreshesIdentityKeysAfterRegistration(t *testing.T) {
 		t.Fatalf("authority rejected a registration added after construction: %v", err)
 	}
 }
+
+func TestRegistrationMatchesAudienceSubset(t *testing.T) {
+	nodePublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewMemoryRegistrationStore()
+	registration := WorkloadRegistration{
+		RegistrationID:          "registration-1",
+		Identity:                "worker-1",
+		IdentityPublicKey:       identity.EncodePublicKey(nodePublic),
+		ClusterID:               "cluster-1",
+		ServiceAccountNamespace: "default",
+		ServiceAccountName:      "reader",
+		ServiceAccountUID:       "sa-uid-1",
+		PodUID:                  "pod-uid-1",
+		Issuer:                  "https://issuer.example",
+		AllowedAudiences:        []string{"api", "istio-ca"},
+		TokenGeneration:         "generation-1",
+		PolicyVersion:           "policy-1",
+		Active:                  true,
+	}
+	if err := store.Register(context.Background(), registration); err != nil {
+		t.Fatal(err)
+	}
+
+	base := signapi.TokenBinding{
+		ClusterID:               registration.ClusterID,
+		ServiceAccountNamespace: registration.ServiceAccountNamespace,
+		ServiceAccountName:      registration.ServiceAccountName,
+		ServiceAccountUID:       registration.ServiceAccountUID,
+		PodUID:                  registration.PodUID,
+		Issuer:                  registration.Issuer,
+		TokenGeneration:         registration.TokenGeneration,
+	}
+	tests := []struct {
+		name      string
+		audiences []string
+		wantMatch bool
+	}{
+		{name: "single audience subset", audiences: []string{"api"}, wantMatch: true},
+		{name: "complete audience set", audiences: []string{"api", "istio-ca"}, wantMatch: true},
+		{name: "reordered audience subset", audiences: []string{"istio-ca", "api"}, wantMatch: true},
+		{name: "outside allow-list", audiences: []string{"other"}, wantMatch: false},
+		{name: "empty audience set", audiences: nil, wantMatch: false},
+		{name: "duplicate audience", audiences: []string{"api", "api"}, wantMatch: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binding := base
+			binding.Audience = test.audiences
+			_, err := store.Find(context.Background(), registration.Identity, binding)
+			if (err == nil) != test.wantMatch {
+				t.Fatalf("Find() error = %v, want match %v", err, test.wantMatch)
+			}
+		})
+	}
+}

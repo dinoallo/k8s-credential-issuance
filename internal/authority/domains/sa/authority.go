@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
@@ -476,7 +475,7 @@ func validateRegistration(registration WorkloadRegistration) error {
 }
 
 func registrationMatches(registration WorkloadRegistration, binding signapi.TokenBinding) bool {
-	return registration.ClusterID == binding.ClusterID && registration.ServiceAccountNamespace == binding.ServiceAccountNamespace && registration.ServiceAccountName == binding.ServiceAccountName && registration.ServiceAccountUID == binding.ServiceAccountUID && registration.PodUID == binding.PodUID && registration.Issuer == binding.Issuer && registration.TokenGeneration == binding.TokenGeneration && sameStrings(registration.AllowedAudiences, binding.Audience)
+	return registration.ClusterID == binding.ClusterID && registration.ServiceAccountNamespace == binding.ServiceAccountNamespace && registration.ServiceAccountName == binding.ServiceAccountName && registration.ServiceAccountUID == binding.ServiceAccountUID && registration.PodUID == binding.PodUID && registration.Issuer == binding.Issuer && registration.TokenGeneration == binding.TokenGeneration && audienceSubset(registration.AllowedAudiences, binding.Audience)
 }
 
 func sortedUnique(values []string) bool {
@@ -488,16 +487,24 @@ func sortedUnique(values []string) bool {
 	return true
 }
 
-func sameStrings(left, right []string) bool {
-	leftCopy := append([]string(nil), left...)
-	rightCopy := append([]string(nil), right...)
-	sort.Strings(leftCopy)
-	sort.Strings(rightCopy)
-	if len(leftCopy) != len(rightCopy) {
+func audienceSubset(allowed, requested []string) bool {
+	if len(requested) == 0 {
 		return false
 	}
-	for i := range leftCopy {
-		if leftCopy[i] != rightCopy[i] {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, audience := range allowed {
+		allowedSet[audience] = struct{}{}
+	}
+	requestedSet := make(map[string]struct{}, len(requested))
+	for _, audience := range requested {
+		if audience == "" {
+			return false
+		}
+		if _, duplicate := requestedSet[audience]; duplicate {
+			return false
+		}
+		requestedSet[audience] = struct{}{}
+		if _, permitted := allowedSet[audience]; !permitted {
 			return false
 		}
 	}

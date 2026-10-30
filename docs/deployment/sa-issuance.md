@@ -66,6 +66,11 @@ Authority (`sa-authority`):
 }
 ```
 
+`allowed_audiences` is an allow-list. Each TokenRequest must contain a
+non-empty, unique audience set that is a subset of this list, so a workload
+can request either its default audience or an explicitly registered auxiliary
+audience.
+
 Signer (`sa-signer`):
 
 ```json

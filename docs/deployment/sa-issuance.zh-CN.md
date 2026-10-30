@@ -39,6 +39,10 @@ Authority 至少需要：
 }
 ```
 
+`allowed_audiences` 是允许列表。每个 TokenRequest 必须包含非空且不重复的
+audience 集合，并且该集合必须是此列表的子集；因此同一个 workload 可以请求默认
+audience，或请求已显式注册的辅助 audience。
+
 Signer 至少需要：
 
 ```json
