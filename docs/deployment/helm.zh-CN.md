@@ -9,6 +9,63 @@ Chart README 包含安装示例、values 结构、Secret 处理、TLS 设置、n
 
 这个 Chart 有意不宣称提供 HA 或生产就绪能力。在隔离的参考环境之外使用前，请配置外部 KMS、attestation 服务、mTLS 身份、持久审计链路和支持事务的 ledger。
 
+## Authority 签名私钥 Secret
+
+在安装 issuance 集群 release 前，只生成或初始化一次 Authority 的 EAA Ed25519 私钥。二进制要求 Secret 中存在名为 `eaa-private-key.pem` 的 PKCS#8 PEM 文件：
+
+```bash
+kubectl create namespace issuance
+openssl genpkey -algorithm Ed25519 -out eaa-private-key.pem
+chmod 600 eaa-private-key.pem
+kubectl -n issuance create secret generic sa-authority-signing-key \
+  --from-file=eaa-private-key.pem=./eaa-private-key.pem
+```
+
+在 values 中显式引用：
+
+```yaml
+authority:
+  signingKey:
+    secretName: sa-authority-signing-key
+    key: eaa-private-key.pem
+```
+
+把匹配的公钥使用相同的 `signing_key_id` 配置到
+`signer.config.eaa_keys`，并在 Helm 升级过程中保持私钥不变。如果不设置
+`authority.signingKey.secretName`，Chart 会根据 release 名称生成 Secret 名称，例如
+`kci-issuance-k8s-credential-issuance-authority-signing-key`，但不会创建该 Secret。生产环境请在 Helm 外部创建私钥 Secret；Chart 的 `--set-file` 方式只适用于受控测试环境。
+
+## Signer KMS token Secret
+
+正常 signer 配置使用 Infisical provider。请单独准备 Infisical bearer token，并创建一个数据 key 为 `token` 的 Secret：
+
+```bash
+kubectl -n issuance create secret generic sa-signer-kms \
+  --from-file=token=./infisical-kms-token
+```
+
+在 values 文件中引用：
+
+```yaml
+signer:
+  kms:
+    provider: infisical
+    authToken:
+      secretName: sa-signer-kms
+      key: token
+```
+
+如果不设置 `signer.kms.authToken.secretName`，名为 `kci-issuance` 的 release 会引用但不会创建
+`kci-issuance-k8s-credential-issuance-signer-kms`。如果使用这个默认名称，请按下面的方式创建 Secret，并从 values 中省略 `secretName`：
+
+```bash
+kubectl -n issuance create secret generic \
+  kci-issuance-k8s-credential-issuance-signer-kms \
+  --from-file=token=./infisical-kms-token
+```
+
+生产环境请在 Helm 外部创建这个 Secret；Chart 的 `--set-file` token 方式只适用于受控测试。使用通用 `http` KMS provider 不需要 Infisical token Secret。
+
 ## 生产集群与外部 issuance 集群分离部署
 
 生产环境请将 issuance 服务和 node-agent 拆成两个 Helm release：

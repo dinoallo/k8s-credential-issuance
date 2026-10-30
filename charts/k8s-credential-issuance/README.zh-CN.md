@@ -17,16 +17,70 @@
 - 仓库 workflow 已发布的三个容器镜像，或为三个镜像配置自定义 repository。
 - Authority Ed25519 签名私钥、每个 node-agent identity 对应的身份私钥，以及正常 signer 路径使用的 Infisical KMS token。
 
-## 安装
+## Authority 签名私钥 Secret
 
-请在 Chart 外部创建所需 Secret。敏感值不会放入默认 `values.yaml` 或生成的 ConfigMap：
+Authority 的 EAA 签名私钥需要只生成或初始化一次，并在 Helm 升级过程中保持不变。如果没有已有密钥，可以生成 PKCS#8 Ed25519 PEM 文件，并在安装 Chart 前创建 Secret：
 
 ```bash
+openssl genpkey -algorithm Ed25519 -out eaa-private-key.pem
+chmod 600 eaa-private-key.pem
 kubectl create namespace issuance
 kubectl -n issuance create secret generic kci-authority-signing-key \
   --from-file=eaa-private-key.pem=./eaa-private-key.pem
+```
+
+在 values 文件中引用这个 Secret。Secret 内的数据 key 必须保持为
+`eaa-private-key.pem`：
+
+```yaml
+authority:
+  signingKey:
+    secretName: kci-authority-signing-key
+    key: eaa-private-key.pem
+```
+
+对应的 Ed25519 公钥也必须使用相同的 `signing_key_id` 配置到
+`signer.config.eaa_keys`。不要在每次部署时重新生成私钥。如果不设置
+`secretName`，名为 `kci-issuance` 的 release 会引用（但不会创建）推导出的
+Secret 名称 `kci-issuance-k8s-credential-issuance-authority-signing-key`。
+
+## Signer KMS token Secret
+
+正常 signer 路径使用 Infisical provider，需要一个从 Infisical 预先取得的 bearer token。这个 token 不是由 Helm 生成的。请创建一个数据 key 为 `token` 的 Secret：
+
+```bash
 kubectl -n issuance create secret generic kci-signer-kms \
   --from-file=token=./infisical-kms-token
+```
+
+在 signer values 中显式引用：
+
+```yaml
+signer:
+  kms:
+    provider: infisical
+    authToken:
+      secretName: kci-signer-kms
+      key: token
+```
+
+如果不设置 `secretName`，名为 `kci-issuance` 的 release 会引用（但不会创建）
+`kci-issuance-k8s-credential-issuance-signer-kms`。如果使用这个默认名称，请按下面的方式创建 Secret，并从 values 中省略 `secretName`：
+
+```bash
+kubectl -n issuance create secret generic \
+  kci-issuance-k8s-credential-issuance-signer-kms \
+  --from-file=token=./infisical-kms-token
+```
+
+生产环境请在 Helm 外部创建这个 Secret；Chart 的
+`--set-file signer.kms.authToken.value=./infisical-kms-token` 方式只适用于受控测试。使用通用 `http` KMS provider 的 signer 不需要这个 Infisical token Secret。
+
+## 安装
+
+请在 Chart 外部创建其余所需 Secret。敏感值不会放入默认 `values.yaml` 或生成的 ConfigMap：
+
+```bash
 kubectl -n issuance create secret generic kci-node-identity \
   --from-file=worker-1.pem=./worker-1.pem
 ```
@@ -90,6 +144,8 @@ helm upgrade --install kci ./charts/k8s-credential-issuance \
   --set nodeAgent.identityKey.create=true \
   --set-file nodeAgent.identityKey.value=./worker-1.pem
 ```
+
+Chart 管理私钥的方式只适用于受控测试环境。生产环境请在 Helm 外部创建 authority Secret，避免私钥被保存到 Helm release values 或 metadata 中。
 
 生产环境请为 authority 和 signer 启用 TLS，引用预先创建的
 `kubernetes.io/tls` Secret，并确保证书包含对应的 Service DNS 名称。默认 HTTP listener 只适用于隔离开发环境。node-agent 默认使用 hostPath 支持的 Unix socket；请将 `nodeAgent.socket.hostPath` 设置为批准的节点路径，并把该路径接入实际消费此 socket 的本地 Kubernetes 组件。

@@ -17,6 +17,74 @@ the external KMS, attestation service, mTLS identities, durable audit path,
 and transactional ledgers before using it beyond an isolated reference
 environment.
 
+## Authority signing-key Secret
+
+Generate or provision the authority EAA Ed25519 private key once before the
+issuance-cluster release is installed. The binary expects a PKCS#8 PEM file in
+a Secret data entry named `eaa-private-key.pem`:
+
+```bash
+kubectl create namespace issuance
+openssl genpkey -algorithm Ed25519 -out eaa-private-key.pem
+chmod 600 eaa-private-key.pem
+kubectl -n issuance create secret generic sa-authority-signing-key \
+  --from-file=eaa-private-key.pem=./eaa-private-key.pem
+```
+
+Reference it explicitly:
+
+```yaml
+authority:
+  signingKey:
+    secretName: sa-authority-signing-key
+    key: eaa-private-key.pem
+```
+
+Configure the matching public key in `signer.config.eaa_keys` under the same
+`signing_key_id`, and keep the private key stable across upgrades. If
+`authority.signingKey.secretName` is omitted, the chart references but does not
+create a name derived from the release, such as
+`kci-issuance-k8s-credential-issuance-authority-signing-key`. Keep private-key
+creation outside Helm in production; the chart-managed `--set-file` path is
+intended for controlled tests.
+
+## Signer KMS token Secret
+
+The normal signer configuration uses the Infisical provider. Provision the
+Infisical bearer token separately and create a Secret whose data key is
+`token`:
+
+```bash
+kubectl -n issuance create secret generic sa-signer-kms \
+  --from-file=token=./infisical-kms-token
+```
+
+Reference it in the values file:
+
+```yaml
+signer:
+  kms:
+    provider: infisical
+    authToken:
+      secretName: sa-signer-kms
+      key: token
+```
+
+If `signer.kms.authToken.secretName` is omitted, a release named `kci-issuance`
+references but does not create
+`kci-issuance-k8s-credential-issuance-signer-kms`. To use that default name,
+create the Secret and omit `secretName` from the values file:
+
+```bash
+kubectl -n issuance create secret generic \
+  kci-issuance-k8s-credential-issuance-signer-kms \
+  --from-file=token=./infisical-kms-token
+```
+
+Keep this Secret outside Helm in production. The chart-managed `--set-file`
+token option is for controlled tests; the generic `http` KMS provider does not
+require an Infisical token Secret.
+
 ## Split-cluster production layout
 
 For production, deploy the issuance services and node agents as separate Helm
