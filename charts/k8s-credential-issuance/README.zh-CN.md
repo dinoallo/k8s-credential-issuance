@@ -94,6 +94,86 @@ helm upgrade --install kci ./charts/k8s-credential-issuance \
 生产环境请为 authority 和 signer 启用 TLS，引用预先创建的
 `kubernetes.io/tls` Secret，并确保证书包含对应的 Service DNS 名称。默认 HTTP listener 只适用于隔离开发环境。node-agent 默认使用 hostPath 支持的 Unix socket；请将 `nodeAgent.socket.hostPath` 设置为批准的节点路径，并把该路径接入实际消费此 socket 的本地 Kubernetes 组件。
 
+## 生产集群与外部 issuance 集群分离部署
+
+推荐的生产拓扑是：把 issuance 服务放在独立的 issuance 集群中，在每个业务集群中运行 node-agent DaemonSet：
+
+```text
+业务集群                                  issuance 集群
+sa-node-agent DaemonSet -- HTTPS -->      sa-authority Service
+                                      \--> sa-signer Service
+```
+
+使用两个 Helm release。issuance 集群的 values 关闭 DaemonSet：
+
+```yaml
+# values-issuance.yaml，在 issuance 集群执行
+authority:
+  enabled: true
+  tls:
+    enabled: true
+    secretName: sa-authority-tls
+  signingKey:
+    secretName: sa-authority-signing-key
+
+signer:
+  enabled: true
+  tls:
+    enabled: true
+    secretName: sa-signer-tls
+  kms:
+    authToken:
+      secretName: sa-signer-kms
+
+nodeAgent:
+  enabled: false
+```
+
+在 issuance 集群创建 authority 签名私钥、signer KMS token 和 TLS Secret 后安装：
+
+```bash
+helm upgrade --install kci-issuance ./charts/k8s-credential-issuance \
+  --namespace issuance --create-namespace \
+  --values ./values-issuance.yaml
+```
+
+业务集群的 values 关闭两个服务 Deployment，并覆盖自动生成的集群内 endpoint：
+
+```yaml
+# values-node-agent.yaml，在业务集群执行
+authority:
+  enabled: false
+
+signer:
+  enabled: false
+
+nodeAgent:
+  enabled: true
+  config:
+    authority_endpoint: https://sa-authority.issuance.example/v1/grants
+    signer_endpoint: https://sa-signer.issuance.example/v1/sign
+    identity: worker-1
+    attestation_endpoint: https://attestor.workload.example/v1/attest
+    attestation_identity: node-attestor-1
+    attestation_public_key: REPLACE_BASE64URL_ED25519_PUBLIC_KEY
+  identityKey:
+    secretName: sa-node-identity
+```
+
+在业务集群创建 node identity Secret 后安装：
+
+```bash
+helm upgrade --install kci-node-agent ./charts/k8s-credential-issuance \
+  --namespace kube-system \
+  --values ./values-node-agent.yaml
+```
+
+如果只是同一集群中的不同 Namespace，可以使用 issuance Service 的完整 DNS 名称，例如
+`https://kci-issuance-k8s-credential-issuance-authority.issuance.svc.cluster.local:9441/v1/grants`。
+如果是不同集群，ClusterIP Service 和 `*.svc.cluster.local` 名称不可路由；请通过内部 LoadBalancer、Gateway 或等价网络路径发布稳定的私有 DNS，并在 node-agent values 中使用这些名称。Chart 不会创建跨集群网络路径。
+
+当前二进制和 Chart 只提供 server-side TLS；客户端证书、自定义 CA bundle 和完整 mTLS 身份 provisioning 必须由外围平台提供。还需要注意，一个 node-agent DaemonSet 当前会在所有节点挂载同一份配置的 `identity` 和 identity-key Secret；如果需要每节点独立身份，需要拆分 node pool/release，或增加节点本地的身份注入机制。
+
 ## 配置与扩缩容
 
 - Authority 和 signer 默认使用独立 PVC 保存状态。使用仓库内置文件型 store 时请保持单副本；扩容前必须替换为支持事务的共享 backend。
